@@ -1,18 +1,17 @@
 import { NextResponse } from "next/server";
 import { AIService } from "@/lib/services/ai";
+import { ApiError, handler, readJson, requireUser } from "@/lib/api";
 
-export async function POST(req) {
-  try {
-    const { requestId } = await req.json();
+// This route had no session check at all — it was a fully public read of any
+// job's result URLs.
+export const POST = handler("YOUTUBE_DOWNLOAD_STATUS", async (req) => {
+  const user = await requireUser();
 
-    if (!requestId) {
-      return NextResponse.json({ error: "requestId is required" }, { status: 400 });
-    }
+  const { requestId } = await readJson(req);
+  if (!requestId) throw new ApiError(400, "requestId is required.");
 
-    const result = await AIService.checkStatus(requestId);
-    return NextResponse.json(result);
-  } catch (error) {
-    console.error("[YOUTUBE_DOWNLOAD_STATUS]", error);
-    return NextResponse.json({ error: error.message || "Internal Error" }, { status: 500 });
-  }
-}
+  const result = await AIService.checkStatus(requestId, user.id);
+  if (result.status === "not_found") throw new ApiError(404, "Job not found.");
+
+  return NextResponse.json(result);
+});

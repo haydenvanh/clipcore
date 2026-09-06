@@ -1,19 +1,15 @@
 import { NextResponse } from "next/server";
 import { AIService } from "@/lib/services/ai";
+import { handler, readJson, requireUser } from "@/lib/api";
 
-export async function POST(req) {
-  try {
-    const { video_url, num_highlights } = await req.json();
+// Previously unauthenticated, and it performed a server-side fetch on any URL
+// the caller supplied: an anonymous SSRF and a free outbound-request proxy.
+export const POST = handler("CALCULATE_COST", async (req) => {
+  await requireUser();
 
-    if (!video_url) {
-      return NextResponse.json({ cost: 0 });
-    }
+  const { video_url, num_highlights } = await readJson(req);
+  if (!video_url) return NextResponse.json({ cost: 0, estimated: true });
 
-    const cost = await AIService.calculateClippingCost(video_url, num_highlights);
-
-    return NextResponse.json({ cost });
-  } catch (error) {
-    console.error("[CALCULATE_COST_ERROR]", error);
-    return NextResponse.json({ error: "Failed to calculate cost" }, { status: 500 });
-  }
-}
+  const result = await AIService.calculateClippingCost(video_url, num_highlights);
+  return NextResponse.json(result);
+});

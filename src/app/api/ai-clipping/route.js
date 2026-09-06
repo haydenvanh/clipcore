@@ -1,35 +1,18 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
 import { AIService } from "@/lib/services/ai";
+import { ApiError, handler, readJson, requireUser } from "@/lib/api";
 
-export async function POST(req) {
-  try {
-    const session = await getServerSession(authOptions);
+export const POST = handler("AI_CLIPPING", async (req) => {
+  const user = await requireUser();
 
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const { video_url, num_highlights, aspect_ratio } = await readJson(req);
+  if (!video_url) throw new ApiError(400, "A video URL is required.");
 
-    const body = await req.json();
-    const { video_url, num_highlights, aspect_ratio } = body;
+  const result = await AIService.aiClipping(user.id, {
+    video_url,
+    num_highlights,
+    aspect_ratio,
+  });
 
-    if (!video_url) {
-      return NextResponse.json({ error: "Video URL is required" }, { status: 400 });
-    }
-
-    const result = await AIService.aiClipping(session.user.id, {
-      video_url,
-      num_highlights,
-      aspect_ratio,
-    });
-
-    return NextResponse.json(result);
-  } catch (error) {
-    if (error.message === "Insufficient credits") {
-      return new NextResponse("Insufficient credits", { status: 403 });
-    }
-    console.error("[AI_CLIPPING]", error);
-    return new NextResponse(error.message || "Internal Error", { status: 500 });
-  }
-}
+  return NextResponse.json(result);
+});

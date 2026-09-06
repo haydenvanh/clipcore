@@ -1,253 +1,319 @@
+import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import { UserService } from "./user";
+import { CreditService } from "./credits";
 import config from "@/lib/config";
+import { assertSafeUrl, safeFetch } from "@/lib/url-guard";
+
+const DEFAULT_DURATION_SECONDS = 300;
+const MAX_HIGHLIGHTS = 60;
+const YT_DOWNLOAD_COST = 5;
 
 /**
- * Service to manage AICLIP generations using muapi.ai
+ * MuAPI-backed clipping provider.
+ *
+ * This is the `muapi` implementation of the provider seam described in
+ * docs/02-ROADMAP.md D1. It stays the default so nothing regresses while the
+ * native worker is built; the interface (submit → request id → webhook/poll)
+ * is what the native provider will also implement.
  */
 export const AIService = {
   /**
-   * Helper to fetch YouTube video duration without external libraries
+   * Best-effort YouTube duration lookup.
+   *
+   * Fetches through safeFetch, which enforces the host allowlist, blocks
+   * private/link-local addresses, and re-validates every redirect hop. The
+   * old version fetched any string containing "youtube.com" anywhere, so
+   * `http://169.254.169.254/?x=youtube.com` reached cloud metadata.
    */
   async getYoutubeDuration(url) {
     try {
-      const response = await fetch(url);
+      const response = await safeFetch(url, { timeoutMs: 8000 });
+      if (!response.ok) return null;
       const text = await response.text();
-      // Look for lengthSeconds in the YouTube page source
       const match = text.match(/"lengthSeconds":"(\d+)"/);
       if (match && match[1]) {
-        return parseInt(match[1]);
+        const seconds = parseInt(match[1], 10);
+        if (Number.isFinite(seconds) && seconds > 0) return seconds;
       }
-      return 300; // Fallback
+      return null;
     } catch (error) {
-      console.error("[GET_YT_DURATION_ERROR]", error);
-      return 300;
+      console.warn("[GET_YT_DURATION]", error.message);
+      return null;
     }
   },
 
   /**
-   * Calculate dynamic cost for AI clipping
+   * Estimated credit cost for a clipping job.
+   *
+   * Estimated, not final: when the duration cannot be read we fall back to a
+   * nominal 5 minutes, which under-charges long videos. The real fix is
+   * ffprobe in the worker settling the hold against actual minutes processed
+   * (roadmap D4); until then this is a documented cost leak, tracked as V6.
    */
   async calculateClippingCost(video_url, num_highlights) {
-    let duration_seconds = 300; 
-    
-    // If it's a YouTube URL, try to fetch its real duration
-    if (video_url.includes("youtube.com") || video_url.includes("youtu.be")) {
-      duration_seconds = await this.getYoutubeDuration(video_url);
+    assertSafeUrl(video_url, { allowAnyHost: true });
+
+    const highlights = this.normalizeHighlights(num_highlights);
+
+    let durationSeconds = null;
+    let estimated = true;
+
+    try {
+      const url = new URL(video_url);
+      const host = url.hostname.toLowerCase();
+      if (/(^|\.)(youtube\.com|youtu\.be)$/.test(host)) {
+        durationSeconds = await this.getYoutubeDuration(video_url);
+        estimated = durationSeconds === null;
+      }
+    } catch {
+      /* assertSafeUrl already validated it; nothing to do */
     }
 
-    const rounded_minutes = Math.round(duration_seconds / 60);
-    
-    // $0.05 per minute + $0.05 per highlight
-    const cost_dollars = (rounded_minutes * 0.05) + (num_highlights * 0.05);
-    // Convert to credits (x200)
-    return Math.round(cost_dollars * 200);
+    const seconds = durationSeconds ?? DEFAULT_DURATION_SECONDS;
+    const minutes = Math.max(1, Math.round(seconds / 60));
+    const costDollars = minutes * 0.05 + highlights * 0.05;
+
+    return {
+      cost: Math.round(costDollars * 200),
+      durationSeconds: seconds,
+      estimated,
+    };
   },
 
-  /**
-   * Execute a YouTube Download request
-   */
-  async youtubeDownload(userId, { video_url, format = "720" }) {
-    const cost = 5; // Fixed cost for YT Download
-    await UserService.deductCredits(userId, cost);
+  normalizeHighlights(value) {
+    const n = parseInt(value, 10);
+    if (!Number.isFinite(n)) return 3;
+    return Math.min(MAX_HIGHLIGHTS, Math.max(1, n));
+  },
 
+  /** POST a job to MuAPI and return its request id. */
+  async submitToMuapi(endpoint, payload) {
     const apiKey = config.ai.aiclips.apiKey;
     if (!apiKey) throw new Error("AICLIPS_API_KEY is not configured");
 
-    const webhookUrl = `${config.auth.webhook_url}/api/webhook/muapi`;
-    const submitUrl = `${config.ai.aiclips.youtubeEndpoint}?webhook=${encodeURIComponent(webhookUrl)}`;
-    
-    const submitRes = await fetch(submitUrl, {
+    const webhookUrl = new URL(
+      "/api/webhook/muapi",
+      config.auth.webhook_url
+    );
+    if (config.ai.aiclips.webhookSecret) {
+      webhookUrl.searchParams.set("token", config.ai.aiclips.webhookSecret);
+    }
+
+    const submitUrl = `${endpoint}?webhook=${encodeURIComponent(webhookUrl.toString())}`;
+
+    const res = await fetch(submitUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        video_url,
-        format,
-      }),
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30_000),
     });
 
-    if (!submitRes.ok) {
-      const errorText = await submitRes.text();
-      throw new Error(`YouTube Download Failed: ${submitRes.status} ${errorText}`);
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`Provider request failed: ${res.status} ${errorText}`);
     }
 
-    const data = await submitRes.json();
+    const data = await res.json();
     const requestId = data.request_id || data.id;
+    if (!requestId) throw new Error("No request_id received from provider");
 
-    if (!requestId) throw new Error("No request_id received from API");
+    return { data, requestId };
+  },
 
-    const creationModel = prisma.creation || prisma.Creation;
-    if (creationModel) {
-      // Check if already completed/failed in initial response
-      const isCompleted = data.status === "completed" || data.status === "succeeded";
-      const isFailed = data.status === "failed";
-      
-      let mediaUrls = [];
-      if (isCompleted) {
-        if (data.outputs && Array.isArray(data.outputs)) mediaUrls = data.outputs;
-        else if (data.url) mediaUrls = [data.url];
-        else if (data.video_url) mediaUrls = [data.video_url];
-      }
+  /** Pull the media URLs out of a MuAPI payload, whatever shape it arrived in. */
+  extractMediaUrls(data) {
+    if (Array.isArray(data.outputs)) return data.outputs;
+    if (data.url) return [data.url];
+    if (data.video_url) return [data.video_url];
+    if (data.download_url) return [data.download_url];
+    return [];
+  },
 
-      await creationModel.create({
-        data: {
-          userId,
-          type: "youtube_download",
-          resolution: format,
-          requestId: requestId,
-          status: isCompleted ? "completed" : (isFailed ? "failed" : "processing"),
-          resultUrl: isCompleted ? JSON.stringify(mediaUrls) : null,
-          error: isFailed ? (data.error || "Generation failed") : null
-        }
+  /**
+   * Download a source video from YouTube.
+   *
+   * Credits are debited atomically and refunded if the provider rejects the
+   * job, so a provider outage no longer silently burns the user's balance.
+   */
+  async youtubeDownload(userId, { video_url, format = "720" }) {
+    assertSafeUrl(video_url); // strict allowlist: YouTube/TikTok/Instagram only
+
+    // Allocated before the hold so the hold and any later refund share one
+    // reference — the provider's request id does not exist yet.
+    const requestKey = randomUUID();
+    const cost = YT_DOWNLOAD_COST;
+    await CreditService.hold(userId, cost, { refType: "creation", refId: requestKey });
+
+    let submission;
+    try {
+      submission = await this.submitToMuapi(config.ai.aiclips.youtubeEndpoint, {
+        video_url,
+        format,
       });
-
-      if (isCompleted) {
-        return { request_id: requestId, status: "completed", clips: mediaUrls };
-      }
+    } catch (error) {
+      await CreditService.refund(userId, cost, { refType: "creation", refId: requestKey, description: "Provider rejected the job" });
+      throw error;
     }
-    
+
+    const { data, requestId } = submission;
+    const isCompleted = data.status === "completed" || data.status === "succeeded";
+    const isFailed = data.status === "failed";
+    const mediaUrls = isCompleted ? this.extractMediaUrls(data) : [];
+
+    if (isFailed) {
+      await CreditService.refund(userId, cost, { refType: "creation", refId: requestKey, description: "Provider returned failed" });
+    }
+
+    await prisma.creation.create({
+      data: {
+        userId,
+        type: "youtube_download",
+        resolution: format,
+        requestId,
+        creditsCharged: cost,
+        status: isCompleted ? "completed" : isFailed ? "failed" : "processing",
+        resultUrl: isCompleted ? JSON.stringify(mediaUrls) : null,
+        error: isFailed ? data.error || "Generation failed" : null,
+      },
+    });
+
+    if (isCompleted) {
+      return { request_id: requestId, status: "completed", clips: mediaUrls };
+    }
+    return { request_id: requestId, status: "processing" };
+  },
+
+  /** Submit an AI clipping job for an already-resolved video URL. */
+  async aiClipping(userId, { video_url, num_highlights = 3, aspect_ratio = "9:16" }) {
+    // The clipping tab receives a direct media URL (often a provider CDN
+    // link), so the host allowlist does not apply — but private addresses,
+    // embedded credentials, and non-HTTP schemes are still rejected.
+    assertSafeUrl(video_url, { allowAnyHost: true });
+
+    const requestKey = randomUUID();
+    const highlights = this.normalizeHighlights(num_highlights);
+    const { cost } = await this.calculateClippingCost(video_url, highlights);
+
+    await CreditService.hold(userId, cost, { refType: "creation", refId: requestKey });
+
+    let submission;
+    try {
+      submission = await this.submitToMuapi(config.ai.aiclips.clippingEndpoint, {
+        video_url,
+        num_highlights: highlights,
+        aspect_ratio,
+      });
+    } catch (error) {
+      await CreditService.refund(userId, cost, { refType: "creation", refId: requestKey, description: "Provider rejected the job" });
+      throw error;
+    }
+
+    const { data, requestId } = submission;
+    const isCompleted = data.status === "completed" || data.status === "succeeded";
+    const isFailed = data.status === "failed";
+    const mediaUrls = isCompleted ? this.extractMediaUrls(data) : [];
+
+    if (isFailed) {
+      await CreditService.refund(userId, cost, { refType: "creation", refId: requestKey, description: "Provider returned failed" });
+    }
+
+    await prisma.creation.create({
+      data: {
+        userId,
+        type: "ai_clipping",
+        aspectRatio: aspect_ratio,
+        numClips: highlights,
+        requestId,
+        creditsCharged: cost,
+        status: isCompleted ? "completed" : isFailed ? "failed" : "processing",
+        resultUrl: isCompleted ? JSON.stringify(mediaUrls) : null,
+        error: isFailed ? data.error || "Generation failed" : null,
+      },
+    });
+
+    if (isCompleted) {
+      return { request_id: requestId, status: "completed", clips: mediaUrls };
+    }
     return { request_id: requestId, status: "processing" };
   },
 
   /**
-   * Execute an AI Clipping request
+   * Status of one job, scoped to its owner.
+   *
+   * `userId` is required: the previous version looked the row up by
+   * requestId alone, so any caller who knew a request id could read another
+   * user's result URLs.
    */
-  async aiClipping(userId, { video_url, num_highlights = 3, aspect_ratio = "9:16" }) {
-    const numHighlights = parseInt(num_highlights);
-    const cost = await this.calculateClippingCost(video_url, numHighlights);
-    await UserService.deductCredits(userId, cost);
+  async checkStatus(requestId, userId) {
+    if (!userId) throw new Error("checkStatus requires a userId");
 
-    const apiKey = config.ai.aiclips.apiKey;
-    if (!apiKey) throw new Error("AICLIPS_API_KEY is not configured");
-
-    const webhookUrl = `${config.auth.webhook_url}/api/webhook/muapi`;
-    const submitUrl = `${config.ai.aiclips.clippingEndpoint}?webhook=${encodeURIComponent(webhookUrl)}`;
-    
-    const submitRes = await fetch(submitUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        video_url,
-        num_highlights: parseInt(num_highlights),
-        aspect_ratio,
-      }),
+    const creation = await prisma.creation.findFirst({
+      where: { requestId, userId },
     });
 
-    if (!submitRes.ok) {
-      const errorText = await submitRes.text();
-      throw new Error(`AI Clipping Failed: ${submitRes.status} ${errorText}`);
-    }
-
-    const data = await submitRes.json();
-    const request_id = data.request_id || data.id;
-
-    if (!request_id) throw new Error("No request_id received from API");
-
-    const creationModel = prisma.creation || prisma.Creation;
-    if (creationModel) {
-      const isCompleted = data.status === "completed" || data.status === "succeeded";
-      const isFailed = data.status === "failed";
-      
-      let mediaUrls = [];
-      if (isCompleted) {
-        if (data.outputs && Array.isArray(data.outputs)) mediaUrls = data.outputs;
-      }
-
-      await creationModel.create({
-        data: {
-          userId,
-          type: "ai_clipping",
-          aspectRatio: aspect_ratio,
-          numClips: parseInt(num_highlights),
-          requestId: request_id,
-          status: isCompleted ? "completed" : (isFailed ? "failed" : "processing"),
-          resultUrl: isCompleted ? JSON.stringify(mediaUrls) : null,
-          error: isFailed ? (data.error || "Generation failed") : null
-        }
-      });
-
-      if (isCompleted) {
-        return { request_id: request_id, status: "completed", clips: mediaUrls };
-      }
-    }
-
-    return { request_id };
-  },
-
-  /**
-   * Check the status of a specific generation (Poll DB ONLY)
-   */
-  async checkStatus(requestId) {
-    const creationModel = prisma.creation || prisma.Creation;
-    if (!creationModel) return { status: "processing" };
-
-    const creation = await creationModel.findUnique({
-      where: { requestId }
-    });
-
-    if (!creation) return { status: "processing" };
+    if (!creation) return { status: "not_found" };
 
     if (creation.status === "completed") {
-      try {
-        const urlData = JSON.parse(creation.resultUrl || "[]");
-        return { status: "completed", clips: urlData };
-      } catch (e) {
-        return { status: "completed", clips: [creation.resultUrl] };
-      }
+      return { status: "completed", clips: this.parseResultUrls(creation.resultUrl) };
     }
 
     if (creation.status === "failed") {
-      throw new Error(creation.error || "Generation failed.");
+      return { status: "failed", error: creation.error || "Generation failed." };
     }
 
-    // Fallback: Check MuAPI directly if still processing (helps when webhooks fail on localhost)
+    // Webhooks do not reach localhost, so fall back to polling the provider.
+    const resolved = await this.pollProvider(creation);
+    return resolved ?? { status: "processing" };
+  },
+
+  parseResultUrls(resultUrl) {
+    if (!resultUrl) return [];
     try {
-      const apiKey = config.ai.aiclips.apiKey;
-      const pollUrl = `https://api.muapi.ai/api/v1/predictions/${requestId}/result`;
-      
-      const res = await fetch(pollUrl, {
-        headers: { "x-api-key": apiKey }
-      });
-      
-      if (res.ok) {
-        const data = await res.json();
-        const isCompleted = data.status === "completed" || data.status === "succeeded";
-        const isFailed = data.status === "failed";
+      const parsed = JSON.parse(resultUrl);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+      return [resultUrl];
+    }
+  },
 
-        if (isCompleted) {
-          let mediaUrls = data.outputs || [];
-          if (mediaUrls.length === 0) {
-            if (data.url) mediaUrls = [data.url];
-            else if (data.video_url) mediaUrls = [data.video_url];
-            else if (data.download_url) mediaUrls = [data.download_url];
-          }
+  /** Ask MuAPI directly whether a still-processing job has finished. */
+  async pollProvider(creation) {
+    const apiKey = config.ai.aiclips.apiKey;
+    if (!apiKey) return null;
 
-          await creationModel.update({
-            where: { id: creation.id },
-            data: {
-              status: "completed",
-              resultUrl: JSON.stringify(mediaUrls)
-            }
-          });
-          return { status: "completed", clips: mediaUrls };
-        } else if (isFailed) {
-          await creationModel.update({
-            where: { id: creation.id },
-            data: { status: "failed", error: data.error || "Generation failed" }
-          });
-          throw new Error(data.error || "Generation failed.");
-        }
+    try {
+      const res = await fetch(
+        `${config.ai.aiclips.baseUrl}/predictions/${encodeURIComponent(creation.requestId)}/result`,
+        { headers: { "x-api-key": apiKey }, signal: AbortSignal.timeout(10_000) }
+      );
+      if (!res.ok) return null;
+
+      const data = await res.json();
+      const isCompleted = data.status === "completed" || data.status === "succeeded";
+      const isFailed = data.status === "failed";
+
+      if (isCompleted) {
+        const mediaUrls = this.extractMediaUrls(data);
+        await prisma.creation.update({
+          where: { id: creation.id },
+          data: { status: "completed", resultUrl: JSON.stringify(mediaUrls) },
+        });
+        return { status: "completed", clips: mediaUrls };
       }
-    } catch (e) {
-      console.warn("[CHECK_STATUS_FALLBACK_FAILED]", e.message);
+
+      if (isFailed) {
+        const message = data.error || "Generation failed";
+        await prisma.creation.update({
+          where: { id: creation.id },
+          data: { status: "failed", error: message },
+        });
+        await CreditService.refund(creation.userId, creation.creditsCharged ?? 0, { refType: "creation", refId: creation.requestId, description: "Job failed" });
+        return { status: "failed", error: message };
+      }
+    } catch (error) {
+      console.warn("[POLL_PROVIDER]", error.message);
     }
 
-    return { status: "processing" };
-  }
+    return null;
+  },
 };

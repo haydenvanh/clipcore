@@ -1,29 +1,44 @@
+// ClipCore schema.
+//
+// Design notes live in docs/02-ROADMAP.md. The short version:
+//   - The NextAuth trio (Account/Session/VerificationToken) is untouched.
+//   - CreditLedger is append-only and is the source of truth for credits;
+//     User.credits is a cache written in the same transaction (D4).
+//   - Video -> Clip -> Render replaces Creation's JSON-in-a-text-column, so
+//     scores, transcripts, and per-preset exports become real rows (D2).
+//   - Job is a Postgres-backed queue drained with FOR UPDATE SKIP LOCKED (D6).
+
 generator client {
   provider      = "prisma-client-js"
-  binaryTargets = ["native", "rhel-openssl-1.0.x", "rhel-openssl-3.0.x"]
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
   provider = "postgresql"
 }
 
+// ───────────────────────────── Auth (NextAuth) ──────────────────────────────
+// These three models are dictated by @next-auth/prisma-adapter. Do not rename
+// columns here: the adapter maps to them by name.
+
 model Account {
-  id                 String  @id @default(cuid())
-  userId             String
-  type               String
-  provider           String
-  providerAccountId  String
-  refresh_token      String?  @db.Text
-  access_token       String?  @db.Text
-  expires_at         Int?
-  token_type         String?
-  scope              String?
-  id_token           String?  @db.Text
-  session_state      String?
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
+  @@index([userId])
 }
 
 model Session {
@@ -32,35 +47,8 @@ model Session {
   userId       String
   expires      DateTime
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
 
-model User {
-  id            String    @id @default(cuid())
-  name          String?
-  email         String?   @unique
-  emailVerified DateTime?
-  image         String?
-  credits       Int       @default(10)
-  accounts      Account[]
-  sessions      Session[]
-  creations     Creation[]
-}
-
-model Creation {
-  id           String   @id @default(cuid())
-  type         String   @default("ai_clipping")
-  resultUrl    String?  @db.Text
-  aspectRatio  String?
-  resolution   String?
-  numClips     Int?
-  createdAt    DateTime @default(now())
-  userId       String
-  
-  requestId    String?  @unique
-  status       String   @default("processing")
-  error        String?  @db.Text
-  
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
 }
 
 model VerificationToken {
@@ -69,4 +57,512 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+// ──────────────────────────────── Identity ──────────────────────────────────
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  role          UserRole  @default(USER)
+
+  /// Cached balance. Source of truth is the sum of CreditLedger.delta; this is
+  /// written inside the same transaction as every ledger row and reconciled
+  /// nightly. Reading it avoids an aggregate on every request.
+  ///
+  /// Defaults to 0, not 10: the signup bonus is granted as a ledger entry in
+  /// the NextAuth createUser event, so the cache and the ledger agree. A column
+  /// default would put every new user permanently 10 credits out of sync.
+  credits Int @default(0)
+
+  /// Stripe customer, created lazily on first checkout.
+  stripeCustomerId String? @unique
+
+  /// Tokens issued before this instant are rejected in the NextAuth jwt
+  /// callback. This is what makes "sign out everywhere" and password changes
+  /// effective under the JWT session strategy (D3).
+  sessionsValidAfter DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts           Account[]
+  sessions           Session[]
+  password           Password?
+  passwordResets     PasswordResetToken[]
+  subscriptions      Subscription[]
+  ledgerEntries      CreditLedger[]
+  transactions       Transaction[]
+  videos             Video[]
+  clips              Clip[]
+  renders            Render[]
+  events             Event[]
+  auditLogs          AuditLog[]
+  creations          Creation[]
+
+  @@index([createdAt])
+}
+
+model Password {
+  userId    String   @id
+  /// argon2id hash. Never a plaintext or reversible value.
+  hash      String
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PasswordResetToken {
+  id String @id @default(cuid())
+
+  userId String
+  /// SHA-256 of the token that was emailed. The plaintext exists only in the
+  /// email, so a database leak does not hand over live reset links.
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ──────────────────────────────── Billing ───────────────────────────────────
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+  INCOMPLETE
+  UNPAID
+}
+
+enum PlanId {
+  BASIC
+  PRO
+  ULTRA
+}
+
+model Subscription {
+  id     String @id @default(cuid())
+  userId String
+
+  stripeSubscriptionId String  @unique
+  stripePriceId        String
+  plan                 PlanId
+  status               SubscriptionStatus
+
+  /// Credits granted at the start of each period, snapshotted so a later
+  /// pricing change does not retroactively alter past grants.
+  creditsPerPeriod Int
+
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean  @default(false)
+  canceledAt         DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([currentPeriodEnd])
+}
+
+enum LedgerEntryType {
+  GRANT   // subscription renewal, promo, manual top-up
+  HOLD    // reserved when a job is enqueued
+  SETTLE  // hold converted to a real charge at actual usage
+  REFUND  // hold or charge returned after a failure
+  EXPIRE  // unused credits removed at period end
+  ADJUST  // support/manual correction
+}
+
+/// Append-only. Rows are never updated or deleted — a mistake is corrected by
+/// writing a compensating ADJUST entry, so the history stays auditable.
+model CreditLedger {
+  id     String @id @default(cuid())
+  userId String
+
+  /// Signed: positive adds credits, negative removes them.
+  delta Int
+  type  LedgerEntryType
+
+  /// User.credits immediately after this entry, for O(1) reconciliation.
+  balanceAfter Int
+
+  /// What caused this entry, e.g. ("video", videoId) or ("invoice", inv_123).
+  refType String?
+  refId   String?
+
+  /// Deduplication key. A Stripe event id or job id here makes a retried
+  /// webhook or a re-run worker a no-op instead of a double grant.
+  idempotencyKey String? @unique
+
+  description String?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([refType, refId])
+  @@index([type, createdAt])
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+/// Money, deliberately separate from credits: one dollar amount can produce
+/// several ledger entries, and a refund of money is not a refund of credits.
+model Transaction {
+  id     String @id @default(cuid())
+  userId String
+
+  stripeEventId         String? @unique
+  stripeInvoiceId       String?
+  stripePaymentIntentId String?
+  stripeSubscriptionId  String?
+
+  amountCents Int
+  currency    String            @default("usd")
+  status      TransactionStatus
+  description String?
+
+  creditsGranted Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+// ─────────────────────────────── Media ──────────────────────────────────────
+
+enum VideoSource {
+  UPLOAD
+  YOUTUBE
+  TIKTOK
+  INSTAGRAM
+}
+
+enum MediaStatus {
+  PENDING
+  EXTRACTING
+  TRANSCRIBING
+  ANALYZING
+  RENDERING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+model Video {
+  id     String @id @default(cuid())
+  userId String
+
+  source    VideoSource
+  sourceUrl String?     @db.Text
+  title     String?
+  /// R2/S3 object key for the normalized source file. Null until extraction
+  /// finishes. Storing our own copy is what stops a vendor CDN expiry from
+  /// breaking every historical clip.
+  storageKey  String?
+  thumbnailKey String?
+
+  durationSec Int?
+  sizeBytes   BigInt?
+  width       Int?
+  height      Int?
+
+  status MediaStatus @default(PENDING)
+  error  String?     @db.Text
+
+  /// "muapi" | "native" — which provider handled this video (D1).
+  provider String @default("muapi")
+  /// Provider-side job id, for reconciling late callbacks.
+  providerRequestId String? @unique
+
+  /// Credits reserved when the job was enqueued, settled or refunded on exit.
+  creditsHeld Int @default(0)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transcript Transcript?
+  clips      Clip[]
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+model Transcript {
+  id      String @id @default(cuid())
+  videoId String @unique
+
+  language   String  @default("en")
+  /// Whisper's own confidence in the language it detected.
+  langConfidence Float?
+
+  /// Full plain text, for LLM scoring prompts and search.
+  text String @db.Text
+
+  /// Word-level timings: [{ w, start, end, conf, speaker }]. This is what makes
+  /// karaoke and word-by-word captions possible — sentence-level timings cannot.
+  words Json?
+
+  /// Large transcripts live in object storage; `words` holds them inline only
+  /// while they are small.
+  storageKey String?
+
+  model     String?
+  createdAt DateTime @default(now())
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+}
+
+model Clip {
+  id      String @id @default(cuid())
+  videoId String
+  userId  String
+
+  /// Position in the source, in seconds.
+  startSec Float
+  endSec   Float
+
+  title    String?
+  summary  String? @db.Text
+  hook     String? @db.Text
+
+  /// Phase 5 scores, 0..100. Kept as separate columns rather than a JSON blob
+  /// so they can be sorted and filtered in SQL.
+  viralScore Float?
+  clipScore  Float?
+  confidence Float?
+
+  /// Why the model chose this moment — shown in the UI and used to debug the
+  /// scorer.
+  reasoning String? @db.Text
+  /// Per-signal breakdown: { speechIntensity, reactions, emotion, topicShift, engagement }
+  signals Json?
+
+  status MediaStatus @default(PENDING)
+  order  Int         @default(0)
+
+  createdAt DateTime @default(now())
+
+  video   Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  renders Render[]
+
+  @@index([videoId, order])
+  @@index([userId, createdAt])
+  @@index([viralScore])
+}
+
+enum AspectRatio {
+  RATIO_9_16
+  RATIO_1_1
+  RATIO_16_9
+}
+
+enum PlatformPreset {
+  TIKTOK
+  INSTAGRAM_REELS
+  YOUTUBE_SHORTS
+  X
+  FACEBOOK
+  CUSTOM
+}
+
+enum CaptionStyle {
+  NONE
+  STATIC
+  ANIMATED
+  KARAOKE
+  WORD_BY_WORD
+}
+
+/// One exported file. A clip renders to many rows — 9:16 for TikTok, 1:1 for
+/// Facebook, a Spanish caption track — which is exactly why this is not a
+/// column on Clip.
+model Render {
+  id     String @id @default(cuid())
+  clipId String
+  userId String
+
+  aspectRatio  AspectRatio    @default(RATIO_9_16)
+  preset       PlatformPreset @default(TIKTOK)
+  captionStyle CaptionStyle   @default(KARAOKE)
+  captionLang  String         @default("en")
+
+  storageKey   String?
+  thumbnailKey String?
+  /// Rendered subtitle file (.ass/.srt), kept so captions can be re-styled
+  /// without re-transcribing.
+  captionKey String?
+
+  width     Int?
+  height    Int?
+  sizeBytes BigInt?
+
+  status MediaStatus @default(PENDING)
+  error  String?     @db.Text
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  clip Clip @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clipId, aspectRatio, preset, captionStyle, captionLang])
+  @@index([userId, createdAt])
+  @@index([status])
+}
+
+// ───────────────────────────── Infrastructure ───────────────────────────────
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
+/// Postgres-backed work queue (D6). Workers claim rows with
+/// `FOR UPDATE SKIP LOCKED`, so enqueueing a job and holding its credits happen
+/// in one transaction — which a separate Redis queue could not offer.
+model Job {
+  id String @id @default(cuid())
+
+  /// e.g. "extract", "transcribe", "analyze", "render"
+  type    String
+  payload Json
+
+  status   JobStatus @default(QUEUED)
+  priority Int       @default(0)
+
+  attempts    Int @default(0)
+  maxAttempts Int @default(3)
+
+  /// Exponential backoff: a retry sets this into the future.
+  runAfter DateTime @default(now())
+
+  /// Claim marker plus the worker that holds it, so a reaper can release jobs
+  /// abandoned by a crashed worker.
+  lockedAt DateTime?
+  lockedBy String?
+
+  lastError String? @db.Text
+
+  refType String?
+  refId   String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  @@index([status, runAfter, priority])
+  @@index([refType, refId])
+  @@index([lockedAt])
+}
+
+/// Inbound webhook deduplication. Stripe delivers at least once and retries on
+/// any non-2xx; without this table a retry granted credits twice.
+model WebhookEvent {
+  id String @id @default(cuid())
+
+  provider   String
+  externalId String
+
+  type        String?
+  payload     Json?
+  processedAt DateTime?
+  error       String?   @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@unique([provider, externalId])
+  @@index([provider, createdAt])
+}
+
+/// Product analytics. Append-only, queried by the admin panel.
+model Event {
+  id     String  @id @default(cuid())
+  userId String?
+
+  type    String
+  payload Json?
+
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([type, createdAt])
+  @@index([userId, createdAt])
+}
+
+/// Security- and compliance-relevant actions, especially anything an admin does
+/// to another user's account.
+model AuditLog {
+  id      String  @id @default(cuid())
+  actorId String?
+
+  action String
+  target String?
+  ip     String?
+  userAgent String?
+  meta   Json?
+
+  createdAt DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+}
+
+// ──────────────────────────────── Legacy ────────────────────────────────────
+
+/// Pre-ClipCore job records. Kept read-only so existing users keep their
+/// history; backfilled into Video/Clip, then dropped once verified.
+model Creation {
+  id          String   @id @default(cuid())
+  type        String   @default("ai_clipping")
+  resultUrl   String?  @db.Text
+  aspectRatio String?
+  resolution  String?
+  numClips    Int?
+  createdAt   DateTime @default(now())
+  userId      String
+
+  requestId      String? @unique
+  status         String  @default("processing")
+  error          String? @db.Text
+  creditsCharged Int?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status])
 }

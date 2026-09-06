@@ -1,34 +1,17 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
 import { AIService } from "@/lib/services/ai";
+import { ApiError, handler, readJson, requireUser } from "@/lib/api";
 
-export async function POST(req) {
-  try {
-    const session = await getServerSession(authOptions);
+export const POST = handler("YOUTUBE_DOWNLOAD", async (req) => {
+  const user = await requireUser();
 
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const { video_url, format } = await readJson(req);
+  if (!video_url) throw new ApiError(400, "A video URL is required.");
 
-    const body = await req.json();
-    const { video_url, format } = body;
+  const result = await AIService.youtubeDownload(user.id, {
+    video_url,
+    format: format || "720",
+  });
 
-    if (!video_url) {
-      return NextResponse.json({ error: "YouTube video URL is required" }, { status: 400 });
-    }
-
-    const result = await AIService.youtubeDownload(session.user.id, {
-      video_url,
-      format: format || "720",
-    });
-
-    return NextResponse.json(result);
-  } catch (error) {
-    if (error.message === "Insufficient credits") {
-      return new NextResponse("Insufficient credits", { status: 403 });
-    }
-    console.error("[YOUTUBE_DOWNLOAD]", error);
-    return new NextResponse(error.message || "Internal Error", { status: 500 });
-  }
-}
+  return NextResponse.json(result);
+});

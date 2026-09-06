@@ -1,25 +1,35 @@
-"use client";
-
 import Link from "next/link";
+import config from "@/lib/config";
 
 export default function Footer() {
   const currentYear = new Date().getFullYear();
 
   return (
-    <footer className="w-full border-t border-divider/40 bg-bg-page py-6 text-center text-xs text-secondary-text mt-auto">
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div>
-          &copy; {currentYear} AI SaaS Studio. All rights reserved.
+    <footer className="w-full border-t border-divider/40 bg-bg-page py-8 text-xs text-secondary-text mt-auto">
+      <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+          <div className="flex h-6 w-6 items-center justify-center rounded bg-primary text-white font-extrabold text-[11px]">
+            {config.appName.charAt(0)}
+          </div>
+          <span>
+            &copy; {currentYear} {config.appName}. All rights reserved.
+          </span>
         </div>
-        <div className="flex gap-4">
+
+        <nav className="flex flex-wrap items-center justify-center gap-4">
+          <Link href="/pricing" className="hover:text-primary-text transition-colors">
+            Pricing
+          </Link>
+          <Link href="/#how-it-works" className="hover:text-primary-text transition-colors">
+            How it works
+          </Link>
           <Link href="/terms" className="hover:text-primary-text transition-colors">
-            Terms of Service
+            Terms
           </Link>
-          <span className="opacity-30">•</span>
           <Link href="/privacy" className="hover:text-primary-text transition-colors">
-            Privacy Policy
+            Privacy
           </Link>
-        </div>
+        </nav>
       </div>
     </footer>
   );

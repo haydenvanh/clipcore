@@ -6,7 +6,6 @@ import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { IoClose, IoMenu } from "react-icons/io5";
 import { FiMoon, FiSun, FiLogOut, FiDollarSign, FiPlus, FiUser } from "react-icons/fi";
-import { SiVercel } from "react-icons/si";
 import config from "@/lib/config";
 
 export default function Navbar() {
@@ -23,20 +22,18 @@ export default function Navbar() {
     // Prefetch common routes
   }, []);
 
-  const appMatch = pathname ? pathname.match(/^\/app\/([^\/]+)/) : null;
-  const currentAppId = appMatch ? appMatch[1] : null;
-
-  const navLinks = currentAppId
-    ? [
-        { name: "Workspace", path: `/app/${currentAppId}` },
-        { name: "Gallery", path: `/app/${currentAppId}/gallery` },
-        { name: "Pricing", path: `/app/${currentAppId}/pricing` },
-      ]
-    : [
-        { name: "Workspace", path: "/" },
-        { name: "Gallery", path: "/gallery" },
-        { name: "Pricing", path: "/pricing" },
-      ];
+  // Signed-out visitors get the marketing nav; signed-in users get the app nav.
+  const navLinks =
+    status === "authenticated"
+      ? [
+          { name: "Studio", path: "/dashboard" },
+          { name: "My clips", path: "/gallery" },
+          { name: "Pricing", path: "/pricing" },
+        ]
+      : [
+          { name: "How it works", path: "/#how-it-works" },
+          { name: "Pricing", path: "/pricing" },
+        ];
 
   return (
     <header className="sticky top-0 z-50 w-full glass-panel border-b border-divider/50 shadow-md">
@@ -76,17 +73,6 @@ export default function Navbar() {
         {/* Desktop Actions Section */}
         <div className="hidden md:flex items-center gap-4">
           
-          {/* Vercel Deploy Button */}
-          <a
-            href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FSamurAIGPT%2Fcommon-saas-template"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 rounded-full border border-divider px-4 py-1.5 text-xs font-bold text-secondary-text hover:text-primary-text hover:bg-bg-card transition-colors shadow-sm"
-          >
-            <SiVercel className="text-xs text-white" />
-            <span>Deploy</span>
-          </a>
-
           {status === "authenticated" ? (
             <div className="flex items-center">
               {/* Credit Balance indicator */}
@@ -139,12 +125,20 @@ export default function Navbar() {
               </div>
             </div>
           ) : (
-            <Link
-              href="/login"
-              className="bg-primary text-white px-5 py-1.5 rounded-full text-sm font-bold hover:bg-primary-hover transition-all shadow-md shadow-primary/20"
-            >
-              Sign In
-            </Link>
+            <div className="flex items-center gap-3">
+              <Link
+                href="/login"
+                className="text-sm font-semibold text-secondary-text hover:text-primary-text transition-colors"
+              >
+                Sign in
+              </Link>
+              <Link
+                href="/dashboard"
+                className="bg-primary text-white px-5 py-2 rounded-full text-sm font-bold hover:bg-primary-hover transition-all shadow-md shadow-primary/20"
+              >
+                Start free
+              </Link>
+            </div>
           )}
         </div>
 
@@ -186,17 +180,6 @@ export default function Navbar() {
             ))}
 
             <div className="h-px bg-divider/50 my-2" />
-
-            {/* Vercel Deploy in Mobile menu */}
-            <a
-              href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FSamurAIGPT%2Fcommon-saas-template"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex w-full items-center justify-center gap-2 rounded-full border border-divider py-3 text-xs font-bold text-secondary-text hover:text-primary-text hover:bg-bg-card transition-all"
-            >
-              <SiVercel className="text-xs text-white" />
-              <span>Clone & Deploy Template</span>
-            </a>
 
             {status === "authenticated" ? (
               <button

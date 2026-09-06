@@ -1,27 +1,17 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
 import { AIService } from "@/lib/services/ai";
+import { ApiError, handler, readJson, requireUser } from "@/lib/api";
 
-export async function POST(req) {
-  try {
-    const session = await getServerSession(authOptions);
+export const POST = handler("AI_CLIPPING_STATUS", async (req) => {
+  const user = await requireUser();
 
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const { requestId } = await readJson(req);
+  if (!requestId) throw new ApiError(400, "requestId is required.");
 
-    const body = await req.json();
-    const { requestId } = body;
+  // Scoped to the caller: looking the job up by requestId alone let any user
+  // read any other user's result URLs.
+  const result = await AIService.checkStatus(requestId, user.id);
+  if (result.status === "not_found") throw new ApiError(404, "Job not found.");
 
-    if (!requestId) {
-      return NextResponse.json({ error: "Request ID is required" }, { status: 400 });
-    }
-
-    const result = await AIService.checkStatus(requestId);
-    return NextResponse.json(result);
-  } catch (error) {
-    console.error("[AICLIP_STATUS]", error);
-    return new NextResponse(error.message || "Internal Error", { status: 500 });
-  }
-}
+  return NextResponse.json(result);
+});

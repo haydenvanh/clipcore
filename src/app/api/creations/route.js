@@ -1,26 +1,33 @@
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { handler, requireUser } from "@/lib/api";
 
-export async function GET() {
-  const session = await getServerSession(authOptions);
+const DEFAULT_LIMIT = 24;
+const MAX_LIMIT = 100;
 
-  if (!session || !session.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+// Was unpaginated: it returned a user's entire history on every gallery load.
+export const GET = handler("CREATIONS", async (req) => {
+  const user = await requireUser();
 
-  try {
-    const creations = await prisma.creation.findMany({
-      where: { 
-        userId: session.user.id
-      },
-      orderBy: { createdAt: "desc" },
-    });
+  const params = new URL(req.url).searchParams;
+  const limit = Math.min(
+    MAX_LIMIT,
+    Math.max(1, parseInt(params.get("limit") || DEFAULT_LIMIT, 10) || DEFAULT_LIMIT)
+  );
+  const cursor = params.get("cursor");
 
-    return NextResponse.json(creations);
-  } catch (error) {
-    console.error("Fetch creations error:", error);
-    return NextResponse.json({ error: "Failed to fetch creations" }, { status: 500 });
-  }
-}
+  const creations = await prisma.creation.findMany({
+    where: { userId: user.id },
+    orderBy: { createdAt: "desc" },
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+  });
+
+  const hasMore = creations.length > limit;
+  const items = hasMore ? creations.slice(0, limit) : creations;
+
+  return NextResponse.json({
+    items,
+    nextCursor: hasMore ? items[items.length - 1].id : null,
+  });
+});

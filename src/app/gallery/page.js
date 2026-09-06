@@ -21,26 +21,33 @@ export default function CreationsPage() {
   const [selectedClip, setSelectedClip] = useState(null);
 
   useEffect(() => {
-    if (status === "authenticated") {
-      fetchCreations();
-    } else if (status === "unauthenticated") {
-      router.push("/");
+    if (status === "unauthenticated") {
+      router.push("/login?next=/gallery");
+      return;
     }
-  }, [status]);
+    if (status !== "authenticated") return;
 
-  const fetchCreations = async () => {
-    try {
-      const res = await fetch("/api/creations");
-      const data = await res.json();
-      if (res.ok) {
-        setCreations(data);
+    // Guarded so a fast unmount does not set state on a dead component.
+    let active = true;
+
+    (async () => {
+      try {
+        const res = await fetch("/api/creations");
+        const data = await res.json();
+        if (active && res.ok) {
+          setCreations(Array.isArray(data) ? data : (data.items ?? []));
+        }
+      } catch (error) {
+        console.error("Error fetching creations:", error);
+      } finally {
+        if (active) setLoading(false);
       }
-    } catch (error) {
-      console.error("Error fetching creations:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [status, router]);
 
   const parseResultUrl = (url) => {
     try {
