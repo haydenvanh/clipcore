@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { SocialService } from "@/lib/services/social";
 import { Queue, JOB_TYPES } from "@/lib/queue";
 import { ApiError, handler, readJson, requireUser } from "@/lib/api";
+import { enforceRateLimit } from "@/lib/rate-limit";
 
 /**
  * Queue a clip for publishing.
@@ -12,6 +13,7 @@ import { ApiError, handler, readJson, requireUser } from "@/lib/api";
  */
 export const POST = handler("SOCIAL_PUBLISH", async (req) => {
   const user = await requireUser();
+  await enforceRateLimit("publish", user.id);
 
   const { renderId, socialAccountId, title, description, tags, privacy } = await readJson(req);
   if (!renderId || !socialAccountId) {

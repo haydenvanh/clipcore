@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
+import * as Sentry from "@sentry/nextjs";
 import { InsufficientCreditsError } from "@/lib/services/credits";
 
 /**
@@ -56,7 +57,11 @@ export function errorResponse(scope, error) {
       { status: 402 }
     );
   }
+  // Only genuinely unexpected failures reach here — the branches above are
+  // expected outcomes and would be noise in the error tracker.
   console.error(`[${scope}]`, error);
+  Sentry.captureException(error, { tags: { scope } });
+
   return NextResponse.json({ error: "Something went wrong. Please try again." }, { status: 500 });
 }
 

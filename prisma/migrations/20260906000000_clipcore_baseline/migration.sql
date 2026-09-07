@@ -320,6 +320,16 @@ CREATE TABLE "Job" (
 );
 
 -- CreateTable
+CREATE TABLE "RateLimit" (
+    "key" TEXT NOT NULL,
+    "count" INTEGER NOT NULL DEFAULT 0,
+    "windowStart" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "RateLimit_pkey" PRIMARY KEY ("key")
+);
+
+-- CreateTable
 CREATE TABLE "WebhookEvent" (
     "id" TEXT NOT NULL,
     "provider" TEXT NOT NULL,
@@ -498,6 +508,9 @@ CREATE INDEX "Job_refType_refId_idx" ON "Job"("refType", "refId");
 
 -- CreateIndex
 CREATE INDEX "Job_lockedAt_idx" ON "Job"("lockedAt");
+
+-- CreateIndex
+CREATE INDEX "RateLimit_expiresAt_idx" ON "RateLimit"("expiresAt");
 
 -- CreateIndex
 CREATE INDEX "WebhookEvent_provider_createdAt_idx" ON "WebhookEvent"("provider", "createdAt");

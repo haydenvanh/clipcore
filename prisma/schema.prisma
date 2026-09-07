@@ -590,6 +590,24 @@ model Job {
   @@index([lockedAt])
 }
 
+/// Fixed-window rate limit counters.
+///
+/// In Postgres rather than in memory because Vercel runs many instances and a
+/// per-instance counter multiplies the real limit by the instance count — which
+/// is exactly the case where the limit matters. Redis would be faster, but that
+/// is a second datastore to run for a table that sees one upsert per request
+/// (roadmap D6).
+model RateLimit {
+  /// "<bucket>:<subject>", e.g. "ai_clipping:user_abc".
+  key String @id
+
+  count       Int      @default(0)
+  windowStart DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([expiresAt])
+}
+
 /// Inbound webhook deduplication. Stripe delivers at least once and retries on
 /// any non-2xx; without this table a retry granted credits twice.
 model WebhookEvent {

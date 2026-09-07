@@ -4,6 +4,7 @@ import { createUploadUrl, ALLOWED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from "@/lib/s
 import { BillingService } from "@/lib/services/billing";
 import { limitsForPlan } from "@/lib/plans";
 import { ApiError, handler, readJson, requireUser } from "@/lib/api";
+import { enforceRateLimit } from "@/lib/rate-limit";
 
 /**
  * Issue a presigned PUT so the browser uploads straight to R2.
@@ -17,6 +18,7 @@ import { ApiError, handler, readJson, requireUser } from "@/lib/api";
  */
 export const POST = handler("UPLOAD_PRESIGN", async (req) => {
   const user = await requireUser();
+  await enforceRateLimit("upload", user.id);
 
   const { contentType, contentLength, filename, durationSeconds } = await readJson(req);
 

@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { AIService } from "@/lib/services/ai";
 import { ApiError, handler, readJson, requireUser } from "@/lib/api";
+import { enforceRateLimit } from "@/lib/rate-limit";
 
 export const POST = handler("AI_CLIPPING_STATUS", async (req) => {
   const user = await requireUser();
+  await enforceRateLimit("status", user.id);
 
   const { requestId } = await readJson(req);
   if (!requestId) throw new ApiError(400, "requestId is required.");

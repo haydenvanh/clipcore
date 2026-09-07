@@ -2,9 +2,11 @@ import { NextResponse } from "next/server";
 import { BillingService } from "@/lib/services/billing";
 import { getPlan } from "@/lib/plans";
 import { ApiError, handler, readJson, requireUser } from "@/lib/api";
+import { enforceRateLimit } from "@/lib/rate-limit";
 
 export const POST = handler("BILLING_CHECKOUT", async (req) => {
   const user = await requireUser();
+  await enforceRateLimit("billing", user.id);
 
   const { planId } = await readJson(req);
   const plan = getPlan(planId);
