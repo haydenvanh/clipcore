@@ -21,6 +21,7 @@ export const JOB_TYPES = {
   TRANSCRIBE: "transcribe",
   ANALYZE: "analyze",
   RENDER: "render",
+  PUBLISH: "publish",
 };
 
 /** How long a claim is honoured before a reaper may take the job back. */

@@ -32,6 +32,15 @@ CREATE TYPE "PlatformPreset" AS ENUM ('TIKTOK', 'INSTAGRAM_REELS', 'YOUTUBE_SHOR
 CREATE TYPE "CaptionStyle" AS ENUM ('NONE', 'STATIC', 'ANIMATED', 'KARAOKE', 'WORD_BY_WORD');
 
 -- CreateEnum
+CREATE TYPE "SocialProvider" AS ENUM ('YOUTUBE', 'TIKTOK', 'INSTAGRAM', 'FACEBOOK');
+
+-- CreateEnum
+CREATE TYPE "SocialAccountStatus" AS ENUM ('ACTIVE', 'NEEDS_RECONNECT', 'REVOKED');
+
+-- CreateEnum
+CREATE TYPE "PublicationStatus" AS ENUM ('PENDING', 'UPLOADING', 'PROCESSING', 'PUBLISHED', 'FAILED');
+
+-- CreateEnum
 CREATE TYPE "JobStatus" AS ENUM ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELED');
 
 -- CreateTable
@@ -246,6 +255,49 @@ CREATE TABLE "Render" (
 );
 
 -- CreateTable
+CREATE TABLE "SocialAccount" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "provider" "SocialProvider" NOT NULL,
+    "externalId" TEXT NOT NULL,
+    "displayName" TEXT,
+    "avatarUrl" TEXT,
+    "metadata" JSONB,
+    "accessToken" TEXT NOT NULL,
+    "refreshToken" TEXT,
+    "scope" TEXT,
+    "expiresAt" TIMESTAMP(3),
+    "status" "SocialAccountStatus" NOT NULL DEFAULT 'ACTIVE',
+    "lastError" TEXT,
+    "connectedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "SocialAccount_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Publication" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "renderId" TEXT NOT NULL,
+    "socialAccountId" TEXT NOT NULL,
+    "title" TEXT,
+    "description" TEXT,
+    "tags" JSONB,
+    "privacy" TEXT NOT NULL DEFAULT 'public',
+    "scheduledAt" TIMESTAMP(3),
+    "status" "PublicationStatus" NOT NULL DEFAULT 'PENDING',
+    "externalId" TEXT,
+    "externalUrl" TEXT,
+    "error" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "publishedAt" TIMESTAMP(3),
+
+    CONSTRAINT "Publication_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "Job" (
     "id" TEXT NOT NULL,
     "type" TEXT NOT NULL,
@@ -421,6 +473,24 @@ CREATE INDEX "Render_status_idx" ON "Render"("status");
 CREATE UNIQUE INDEX "Render_clipId_aspectRatio_preset_captionStyle_captionLang_key" ON "Render"("clipId", "aspectRatio", "preset", "captionStyle", "captionLang");
 
 -- CreateIndex
+CREATE INDEX "SocialAccount_userId_status_idx" ON "SocialAccount"("userId", "status");
+
+-- CreateIndex
+CREATE INDEX "SocialAccount_provider_status_idx" ON "SocialAccount"("provider", "status");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "SocialAccount_userId_provider_externalId_key" ON "SocialAccount"("userId", "provider", "externalId");
+
+-- CreateIndex
+CREATE INDEX "Publication_userId_createdAt_idx" ON "Publication"("userId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "Publication_status_scheduledAt_idx" ON "Publication"("status", "scheduledAt");
+
+-- CreateIndex
+CREATE INDEX "Publication_renderId_idx" ON "Publication"("renderId");
+
+-- CreateIndex
 CREATE INDEX "Job_status_runAfter_priority_idx" ON "Job"("status", "runAfter", "priority");
 
 -- CreateIndex
@@ -494,6 +564,18 @@ ALTER TABLE "Render" ADD CONSTRAINT "Render_clipId_fkey" FOREIGN KEY ("clipId") 
 
 -- AddForeignKey
 ALTER TABLE "Render" ADD CONSTRAINT "Render_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SocialAccount" ADD CONSTRAINT "SocialAccount_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Publication" ADD CONSTRAINT "Publication_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Publication" ADD CONSTRAINT "Publication_renderId_fkey" FOREIGN KEY ("renderId") REFERENCES "Render"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Publication" ADD CONSTRAINT "Publication_socialAccountId_fkey" FOREIGN KEY ("socialAccountId") REFERENCES "SocialAccount"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "Event" ADD CONSTRAINT "Event_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
