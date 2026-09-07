@@ -8,9 +8,9 @@
 
 const config = {
   appName: "ClipCore",
-  appTagline: "AI Content Operating System",
+  appTagline: "The AI Content Operating System",
   appDescription:
-    "ClipCore finds the moments worth posting in your long-form video and turns them into captioned, platform-ready clips.",
+    "Upload once, grow everywhere. ClipCore turns one long video into captioned, platform-ready clips — each scored for how likely it is to travel.",
 
   /**
    * Visual theme. Previously read as `config.theme` in layout.js and
