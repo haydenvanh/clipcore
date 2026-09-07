@@ -61,7 +61,41 @@ for (const [key, feature, validate, fix] of CHECKS) {
   groups.get(feature).push({ key, state, fix, value });
 }
 
+// System binaries the worker shells out to. A missing one fails at render
+// time with an ENOENT that says nothing about which tool was absent.
+import { execSync } from "node:child_process";
+
+function binary(name, test) {
+  try {
+    const out = execSync(test, { stdio: ["ignore", "pipe", "ignore"] }).toString();
+    return { ok: true, out };
+  } catch {
+    return { ok: false, out: "" };
+  }
+}
+
 console.log("\nClipCore environment check\n");
+
+const ffmpeg = binary("ffmpeg", "ffmpeg -hide_banner -version");
+const ffprobe = binary("ffprobe", "ffprobe -hide_banner -version");
+const ytdlp = binary("yt-dlp", "yt-dlp --version");
+// The subtitles filter is libass-backed; without it caption burn-in silently
+// has no way to run, which is the feature people pay for.
+const libass = ffmpeg.ok && binary("libass", "ffmpeg -hide_banner -filters").out.includes("subtitles");
+
+const renderOk = ffmpeg.ok && ffprobe.ok && ytdlp.ok && libass;
+console.log(`${renderOk ? GREEN + "✓" : RED + "✗"}${RESET} video rendering ${DIM}(worker only)${RESET}`);
+for (const [label, ok, fix] of [
+  ["ffmpeg", ffmpeg.ok, "brew install ffmpeg"],
+  ["ffprobe", ffprobe.ok, "ships with ffmpeg"],
+  ["yt-dlp", ytdlp.ok, "brew install yt-dlp"],
+  ["ffmpeg libass/subtitles filter", libass,
+    "Your ffmpeg was built without libass, so captions cannot be burned in.\n             brew tap homebrew-ffmpeg/ffmpeg && brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libass"],
+]) {
+  console.log(`    ${ok ? GREEN + "ok" + RESET + "      " : RED + "missing" + RESET + " "} ${label}`);
+  if (!ok) console.log(`             ${DIM}${fix}${RESET}`);
+}
+console.log("");
 
 let blocking = 0;
 for (const [feature, items] of groups) {

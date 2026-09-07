@@ -41,3 +41,6 @@ next-env.d.ts
 # prisma
 # NOTE: prisma/migrations is intentionally TRACKED (roadmap D7).
 /node_modules/.prisma
+
+# Local development storage
+.storage/
