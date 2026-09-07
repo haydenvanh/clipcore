@@ -39,7 +39,7 @@ export default function ProductFrame() {
                 <div
                   key={i}
                   className="flex-1 rounded-[1px] bg-divider"
-                  style={{ height: `${amplitude * 100}%` }}
+                  style={{ height: `${(amplitude * 100).toFixed(2)}%` }}
                 />
               ))}
             </div>

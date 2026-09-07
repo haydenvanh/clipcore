@@ -61,5 +61,11 @@ const rand = seeded(41);
 export const WAVEFORM = Array.from({ length: 96 }, (_, i) => {
   // A slow envelope over noise reads as speech rather than static.
   const envelope = 0.45 + 0.4 * Math.abs(Math.sin(i / 7));
-  return Math.max(0.12, Math.min(1, envelope * (0.55 + rand() * 0.7)));
+  const value = Math.max(0.12, Math.min(1, envelope * (0.55 + rand() * 0.7)));
+
+  // Rounded deliberately. These feed a CSS percentage, and React serializes a
+  // full-precision float differently on the server than in the browser
+  // (46.53982277801579% vs 46.5398%), which trips a hydration mismatch on every
+  // bar. Two decimals is far finer than a pixel at these sizes.
+  return Math.round(value * 10000) / 10000;
 });

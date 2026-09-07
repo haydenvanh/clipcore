@@ -145,7 +145,7 @@ export default function PipelineDemo() {
                           className={`flex-1 rounded-[1px] transition-colors duration-300 ${
                             revealed ? "bg-divider" : "bg-divider/30"
                           }`}
-                          style={{ height: `${amplitude * 100}%` }}
+                          style={{ height: `${(amplitude * 100).toFixed(2)}%` }}
                         />
                       );
                     })}

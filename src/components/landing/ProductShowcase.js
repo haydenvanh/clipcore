@@ -238,7 +238,7 @@ export default function ProductShowcase() {
                       className={`flex-1 rounded-sm transition-colors duration-300 ${
                         passed ? "bg-primary/70" : "bg-white/10"
                       }`}
-                      style={{ height: `${amplitude * 100}%` }}
+                      style={{ height: `${(amplitude * 100).toFixed(2)}%` }}
                     />
                   );
                 })}
