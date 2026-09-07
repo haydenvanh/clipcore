@@ -154,14 +154,24 @@ self-hosted `faster-whisper` on the worker (cuts the largest variable cost ~10×
 
 | Step | Scope | Status |
 | :--- | :--- | :--- |
-| 0 | Security hotfix | ✅ **Done** — 37 tests passing |
-| 1 | Schema + baseline migration | ✅ **Done** — 18 tables, 44 indexes |
-| 2 | Billing: plans, Checkout, Portal, webhook, ledger | ▶ Next |
-| 3 | R2 storage + presigned upload | |
-| 4 | Worker + queue + extract/transcribe/score/render | |
-| 5 | Landing page + dashboard | |
-| 6 | Rate limiting, validation, Sentry, email | |
-| 7 | Launch checklist → public launch | |
+| 0 | Security hotfix | ✅ **Done** |
+| 1 | Schema + baseline migration | ✅ **Done** — 21 tables, 11 enums |
+| 2 | Billing: plans, Checkout, Portal, webhook, ledger | ✅ **Done** |
+| 3 | R2 storage + presigned upload | ✅ **Done** |
+| 4 | Worker + queue + extract/transcribe/score/render | ✅ **Written, unverified against real media** |
+| 5 | Landing page + dashboard | ✅ **Done** |
+| 6 | Rate limiting, route protection, Sentry, legal | ✅ **Done** |
+| — | Social connections + YouTube publishing | ✅ **Done** (TikTok/IG/FB stubbed) |
+| 7 | Launch checklist → public launch | ⏳ **Blocked on live services** |
+
+**The one thing standing between this and a launch:** no real video has been
+through the pipeline. Every stage compiles and its logic is unit-tested, but
+ffmpeg caption timing, crop framing, and Whisper word alignment need eyes on
+actual output. Budget 2–4 rounds of fixes after the first live run.
+
+Remaining, in order: connect the services (`DEPLOYMENT.md`), run one real video
+end to end, re-record the demo video (it still shows the old product name), then
+work `LAUNCH_CHECKLIST.md`.
 
 Detailed architectural reasoning for each: `docs/02-ROADMAP.md`.
 Audit that produced this plan: `docs/01-AUDIT.md`.

@@ -5,7 +5,10 @@ Debt found in the audit is listed with its status. Nothing here is a TODO in the
 were small enough to be a TODO it would already be done.
 
 Baseline at audit: **43 findings across 2,565 LOC** (~1 per 60 lines).
-Current: **12 open**, all either deliberate or scheduled.
+Current: **4 open**, all deliberate with a stated trigger.
+
+Since the audit: 181 tests added, all 4 critical security findings closed, the
+billing system rebuilt, and the pipeline written.
 
 ---
 
@@ -49,16 +52,18 @@ Each of these is a conscious trade. The **trigger** is the condition that makes 
 
 | # | Item | Severity | Scheduled |
 | :--- | :--- | :--- | :--- |
-| O1 | Stripe API version pinned `2023-10-16` on SDK v22 | Medium | Step 2 — pin to current, verify object shapes |
-| O2 | No rate limiting on any route | High | Step 6 |
-| O3 | No Zod validation on route inputs | Medium | Step 6 (partially covered by `readJson` + guards) |
-| O4 | No error tracking | High | Step 6 (Sentry free tier) |
-| O5 | No `/terms`, `/privacy` (footer 404s, Stripe requires them) | Medium | Step 6 |
-| O6 | `page.js` is 594 lines with state, network, polling, and markup | Medium | Step 5 (decomposed when it moves to `/dashboard`) |
-| O7 | Stale credit balance in Navbar until reload | Low | Step 5 |
-| O8 | 3.3 MB demo `.mp4` committed at repo root | Low | Next history rewrite; harmless meanwhile |
-| O9 | Two scrollbar systems (`.custom-scrollbar` vs `.scrollbar-subtle`) | Low | Step 5 |
-| O10 | `downloadMedia` fails CORS on vendor CDN, silently falls back | Low | Resolved by R2 (Step 3) — same-origin presigned URLs |
+| O1 | Stripe API version pin | ~~Medium~~ | ✅ Removed; SDK default is current |
+| O2 | No rate limiting | ~~High~~ | ✅ Postgres-backed, 9 routes |
+| O3 | No Zod validation on route inputs | Low | Open. `readJson` + `assertSafeUrl` + explicit checks cover the actual attack surface; Zod would be tidier, not safer. |
+| O4 | No error tracking | ~~High~~ | ✅ Sentry on server, edge, browser |
+| O5 | No `/terms`, `/privacy` | ~~Medium~~ | ✅ Written, footer no longer 404s |
+| O6 | `page.js` 594 lines | ~~Medium~~ | ✅ Decomposed into `/dashboard` + 5 components |
+| O7 | Stale credit balance | ~~Low~~ | ✅ `/api/me` + `CreditsBadge` |
+| O8 | 3.2 MB demo `.mp4` in git | Low | Open, harmless. **The demo still shows the old product name — re-record before launch.** |
+| O9 | Two scrollbar systems | Low | Open, cosmetic |
+| O10 | `downloadMedia` CORS fallback | ~~Low~~ | ✅ Superseded by signed R2 URLs |
+| **O11** | **No real video has been through the pipeline** | **High** | **Open — the single biggest unknown. Needs live services.** |
+| O12 | No CSP | Medium | Open. Deliberately deferred: a CSP written without measuring what actually loads breaks production. Ship report-only first. |
 
 ## 4. Debt we are choosing to keep indefinitely
 

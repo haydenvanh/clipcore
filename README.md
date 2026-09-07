@@ -105,12 +105,20 @@ Two that are easy to miss:
 
 ## Status
 
-Working: Google auth · landing page · pricing · Stripe subscriptions + Portal · credit ledger ·
-gallery · MuAPI clipping pipeline.
+**Built and verified:** Google auth · landing page · pricing · Stripe subscriptions + Customer
+Portal · credit ledger with hold/settle/refund · R2 storage with presigned upload · Postgres job
+queue · rate limiting · route protection · Sentry · legal pages · dashboard (studio, billing,
+connections) · social connection architecture with YouTube publishing.
 
-In progress: R2 storage · background worker · transcription · viral scoring · caption rendering.
+**Built, not yet run against real media:** the clipping pipeline — extract → transcribe → score →
+render. Every stage compiles and its logic is unit-tested (181 tests), but no real video has been
+through it end to end. Expect ffmpeg caption timing and crop framing to need adjustment on first
+contact with actual footage.
 
-Current position in the plan: [`docs/ROADMAP.md`](docs/ROADMAP.md) §3.
+**Not built:** TikTok / Instagram / Facebook publishing (interfaces and stubs are in place),
+admin panel, email/password login, clip editor.
+
+Full status and what to do next: [`docs/ROADMAP.md`](docs/ROADMAP.md) §3.
 
 ## License
 
