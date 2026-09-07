@@ -29,7 +29,7 @@ CREATE TYPE "AspectRatio" AS ENUM ('RATIO_9_16', 'RATIO_1_1', 'RATIO_16_9');
 CREATE TYPE "PlatformPreset" AS ENUM ('TIKTOK', 'INSTAGRAM_REELS', 'YOUTUBE_SHORTS', 'X', 'FACEBOOK', 'CUSTOM');
 
 -- CreateEnum
-CREATE TYPE "CaptionStyle" AS ENUM ('NONE', 'STATIC', 'ANIMATED', 'KARAOKE', 'WORD_BY_WORD');
+CREATE TYPE "CaptionStyle" AS ENUM ('NONE', 'STATIC', 'ANIMATED', 'KARAOKE', 'WORD_BY_WORD', 'TIKTOK');
 
 -- CreateEnum
 CREATE TYPE "SocialProvider" AS ENUM ('YOUTUBE', 'TIKTOK', 'INSTAGRAM', 'FACEBOOK');
@@ -202,6 +202,8 @@ CREATE TABLE "Transcript" (
     "langConfidence" DOUBLE PRECISION,
     "text" TEXT NOT NULL,
     "words" JSONB,
+    "edited" BOOLEAN NOT NULL DEFAULT false,
+    "editedAt" TIMESTAMP(3),
     "storageKey" TEXT,
     "model" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -240,6 +242,7 @@ CREATE TABLE "Render" (
     "preset" "PlatformPreset" NOT NULL DEFAULT 'TIKTOK',
     "captionStyle" "CaptionStyle" NOT NULL DEFAULT 'KARAOKE',
     "captionLang" TEXT NOT NULL DEFAULT 'en',
+    "captionConfig" JSONB,
     "storageKey" TEXT,
     "thumbnailKey" TEXT,
     "captionKey" TEXT,

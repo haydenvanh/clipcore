@@ -149,3 +149,130 @@ describe("buildSrt", () => {
     expect(srt).toContain("the thing nobody tells you");
   });
 });
+
+// ─── Customization, TikTok style, and VTT ────────────────────────────────────
+
+import { buildVtt, resolveStyle, POSITIONS, FONTS } from "../worker/lib/captions.js";
+
+const W = [
+  { w: "hello", start: 0, end: 0.5 },
+  { w: "world", start: 0.5, end: 1.0 },
+];
+
+describe("resolveStyle", () => {
+  it("returns the preset untouched when nothing is customized", () => {
+    const s = resolveStyle("KARAOKE");
+    expect(s.fontSize).toBe(CAPTION_PRESETS.KARAOKE.fontSize);
+    expect(s.primary).toBe(CAPTION_PRESETS.KARAOKE.primary);
+  });
+
+  it("applies font, size, colour and position overrides", () => {
+    const s = resolveStyle("KARAOKE", {
+      fontName: "Impact", fontSize: 120, primary: "#FF0000", position: "top",
+    });
+    expect(s.fontName).toBe("Impact");
+    expect(s.fontSize).toBe(120);
+    expect(s.primary).toBe("#FF0000");
+    expect(s.alignment).toBe(POSITIONS.top);
+  });
+
+  it("rejects a font we do not ship, rather than rendering a fallback face", () => {
+    // The worker image only has the fonts in FONTS; anything else silently
+    // renders as something else and looks broken.
+    expect(resolveStyle("KARAOKE", { fontName: "Comic Sans MS" }).fontName)
+      .toBe(CAPTION_PRESETS.KARAOKE.fontName);
+    expect(Object.keys(FONTS).length).toBeGreaterThan(3);
+  });
+
+  it("clamps sizes and widths into a renderable range", () => {
+    expect(resolveStyle("KARAOKE", { fontSize: 9999 }).fontSize).toBe(200);
+    expect(resolveStyle("KARAOKE", { fontSize: 1 }).fontSize).toBe(24);
+    expect(resolveStyle("KARAOKE", { outlineWidth: -5 }).outlineWidth).toBe(0);
+  });
+
+  it("ignores a malformed colour instead of writing it into the ASS header", () => {
+    // An unvalidated string here can break the whole filter graph.
+    for (const bad of ["red", "#GGGGGG", "'; drop", "", null, 42]) {
+      expect(resolveStyle("KARAOKE", { primary: bad }).primary)
+        .toBe(CAPTION_PRESETS.KARAOKE.primary);
+    }
+  });
+
+  it("accepts a colour with or without the leading hash", () => {
+    expect(resolveStyle("KARAOKE", { primary: "00FF00" }).primary).toBe("#00FF00");
+    expect(resolveStyle("KARAOKE", { primary: "#00FF00" }).primary).toBe("#00FF00");
+  });
+
+  it("falls back to the karaoke preset for an unknown style name", () => {
+    expect(resolveStyle("NONSENSE").fontSize).toBe(CAPTION_PRESETS.KARAOKE.fontSize);
+  });
+});
+
+describe("TIKTOK style", () => {
+  it("renders a boxed background rather than an outline", () => {
+    const ass = buildAss(W, { style: "TIKTOK" });
+    // BorderStyle 3 = opaque box; field 15 of the Style line.
+    const style = ass.split("\n").find((l) => l.startsWith("Style: Default"));
+    expect(style.split(",")[15]).toBe("3");
+  });
+
+  it("highlights the active word, like karaoke", () => {
+    expect(buildAss(W, { style: "TIKTOK" })).toMatch(/\{\\k\d+\}/);
+  });
+
+  it("keeps lines short enough to read on a phone", () => {
+    expect(CAPTION_PRESETS.TIKTOK.maxWordsPerLine).toBeLessThanOrEqual(3);
+    expect(CAPTION_PRESETS.TIKTOK.fontSize).toBeGreaterThanOrEqual(80);
+  });
+
+  it("uses an outline, not a box, for the other styles", () => {
+    const style = buildAss(W, { style: "KARAOKE" }).split("\n")
+      .find((l) => l.startsWith("Style: Default"));
+    expect(style.split(",")[15]).toBe("1");
+  });
+});
+
+describe("position and background customization", () => {
+  it("writes the requested alignment into the style line", () => {
+    for (const [name, code] of Object.entries(POSITIONS)) {
+      const style = buildAss(W, { customization: { position: name } }).split("\n")
+        .find((l) => l.startsWith("Style: Default"));
+      // Alignment is the 19th field.
+      expect(style.split(",")[18], name).toBe(String(code));
+    }
+  });
+
+  it("can add a background box to a style that does not have one", () => {
+    const style = buildAss(W, { style: "KARAOKE", customization: { background: true } })
+      .split("\n").find((l) => l.startsWith("Style: Default"));
+    expect(style.split(",")[15]).toBe("3");
+  });
+
+  it("can remove the box from TikTok style", () => {
+    const style = buildAss(W, { style: "TIKTOK", customization: { background: false } })
+      .split("\n").find((l) => l.startsWith("Style: Default"));
+    expect(style.split(",")[15]).toBe("1");
+  });
+});
+
+describe("buildVtt", () => {
+  it("starts with the WEBVTT header browsers require", () => {
+    expect(buildVtt(W).startsWith("WEBVTT")).toBe(true);
+  });
+
+  it("uses a dot before milliseconds, where SRT uses a comma", () => {
+    const vtt = buildVtt(W);
+    expect(vtt).toMatch(/00:00:00\.000 --> /);
+    expect(vtt).not.toContain(",000");
+    expect(buildSrt(W)).toContain(",000");
+  });
+
+  it("rebases onto the clip window like the other formats", () => {
+    const vtt = buildVtt([{ w: "x", start: 30, end: 31 }], { clipStart: 30 });
+    expect(vtt).toContain("00:00:00.000");
+  });
+
+  it("returns a valid, empty document when there are no words", () => {
+    expect(buildVtt([]).trim()).toBe("WEBVTT");
+  });
+});

@@ -8,7 +8,7 @@
 
 const config = {
   appName: "ClipCore",
-  appTagline: "Turn long videos into clips that travel.",
+  appTagline: "AI Content Operating System",
   appDescription:
     "ClipCore finds the moments worth posting in your long-form video and turns them into captioned, platform-ready clips.",
 

@@ -46,6 +46,22 @@ export function escapeAssText(text) {
     .replace(/\r?\n/g, "\\N");
 }
 
+/**
+ * Where a caption block sits, mapped to ASS alignment codes.
+ * 1-3 bottom, 4-6 middle, 7-9 top; the middle digit is centred.
+ */
+export const POSITIONS = { bottom: 2, center: 5, top: 8 };
+
+/** Fonts guaranteed present in the worker image (see worker/Dockerfile). */
+export const FONTS = {
+  "Arial Black": "Arial Black",
+  Arial: "Arial",
+  Impact: "Impact",
+  "DejaVu Sans": "DejaVu Sans",
+  "DejaVu Sans Bold": "DejaVu Sans Bold",
+  Verdana: "Verdana",
+};
+
 export const CAPTION_PRESETS = {
   KARAOKE: {
     fontName: "Arial Black",
@@ -85,6 +101,27 @@ export const CAPTION_PRESETS = {
     // A short scale-up as each line appears. \fscx/\fscy are percentages.
     entryEffect: "{\\fad(80,80)\\t(0,120,\\fscx110\\fscy110)\\t(120,220,\\fscx100\\fscy100)}",
   },
+  /**
+   * The look most short-form creators actually ask for: a few big words with a
+   * solid box behind them, so they stay readable over any footage.
+   */
+  TIKTOK: {
+    fontName: "Arial Black",
+    fontSize: 92,
+    primary: "#FFFFFF",
+    secondary: "#FFFFFF",
+    outline: "#000000",
+    outlineWidth: 0,
+    shadow: 0,
+    marginV: 280,
+    maxWordsPerLine: 3,
+    uppercase: true,
+    // BorderStyle 3 draws an opaque box using backColour instead of an outline.
+    boxed: true,
+    backColour: "#000000",
+    backAlpha: 40,
+  },
+
   STATIC: {
     fontName: "Arial",
     fontSize: 72,
@@ -99,6 +136,47 @@ export const CAPTION_PRESETS = {
   },
 };
 
+/**
+ * Merge a preset with user customization.
+ *
+ * Every field is validated and clamped: these values are written straight into
+ * an ASS header, and an unvalidated string there can break the whole filter
+ * graph or inject style overrides.
+ */
+export function resolveStyle(styleName, overrides = {}) {
+  const preset = CAPTION_PRESETS[styleName] ?? CAPTION_PRESETS.KARAOKE;
+  const custom = overrides ?? {};
+
+  const hex = (value, fallback) =>
+    typeof value === "string" && /^#?[0-9a-f]{6}$/i.test(value.trim())
+      ? (value.trim().startsWith("#") ? value.trim() : `#${value.trim()}`)
+      : fallback;
+
+  const clamp = (value, min, max, fallback) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+  };
+
+  return {
+    ...preset,
+    // Only fonts we ship can be honoured; anything else silently renders as a
+    // fallback face and looks broken.
+    fontName: FONTS[custom.fontName] ?? preset.fontName,
+    fontSize: clamp(custom.fontSize, 24, 200, preset.fontSize),
+    primary: hex(custom.primary, preset.primary),
+    secondary: hex(custom.secondary, preset.secondary),
+    outline: hex(custom.outline, preset.outline),
+    outlineWidth: clamp(custom.outlineWidth, 0, 20, preset.outlineWidth),
+    marginV: clamp(custom.marginV, 0, 800, preset.marginV),
+    alignment: POSITIONS[custom.position] ?? POSITIONS.bottom,
+    boxed: custom.background === true ? true : custom.background === false ? false : Boolean(preset.boxed),
+    backColour: hex(custom.backColour, preset.backColour ?? "#000000"),
+    backAlpha: clamp(custom.backAlpha, 0, 255, preset.backAlpha ?? 128),
+    uppercase: typeof custom.uppercase === "boolean" ? custom.uppercase : preset.uppercase,
+    maxWordsPerLine: clamp(custom.maxWordsPerLine, 1, 12, preset.maxWordsPerLine),
+  };
+}
+
 /** Video pixel dimensions per aspect ratio, used as the ASS canvas. */
 export const RESOLUTIONS = {
   RATIO_9_16: { width: 1080, height: 1920 },
@@ -107,7 +185,14 @@ export const RESOLUTIONS = {
 };
 
 function header(preset, { width, height }) {
-  // Alignment 2 = bottom-centre. BorderStyle 1 = outline + drop shadow.
+  // BorderStyle 3 fills an opaque box behind the text using backColour;
+  // BorderStyle 1 draws an outline and drop shadow instead.
+  const borderStyle = preset.boxed ? 3 : 1;
+  const backColour = preset.boxed
+    ? assColor(preset.backColour ?? "#000000", preset.backAlpha ?? 128)
+    : assColor("#000000", 128);
+  const alignment = preset.alignment ?? 2;
+
   return [
     "[Script Info]",
     "ScriptType: v4.00+",
@@ -125,13 +210,13 @@ function header(preset, { width, height }) {
       assColor(preset.primary),
       assColor(preset.secondary),
       assColor(preset.outline),
-      assColor("#000000", 128),
+      backColour,
       "-1", "0", "0", "0",
       "100", "100", "0", "0",
-      "1",
+      borderStyle,
       preset.outlineWidth,
       preset.shadow,
-      "2",
+      alignment,
       "80", "80",
       preset.marginV,
       "1",
@@ -184,8 +269,9 @@ export function buildAss(words, {
   aspectRatio = "RATIO_9_16",
   clipStart = 0,
   clipEnd = Infinity,
+  customization = {},
 } = {}) {
-  const preset = CAPTION_PRESETS[style] ?? CAPTION_PRESETS.KARAOKE;
+  const preset = resolveStyle(style, customization);
   const resolution = RESOLUTIONS[aspectRatio] ?? RESOLUTIONS.RATIO_9_16;
 
   // Keep words that overlap the clip at all, then rebase onto clip time.
@@ -206,7 +292,7 @@ export function buildAss(words, {
     const prefix = preset.entryEffect ?? "";
 
     let text;
-    if (style === "KARAOKE") {
+    if (style === "KARAOKE" || style === "TIKTOK") {
       // \k takes centiseconds and fills each word in turn, so the line is
       // visible whole while the highlight tracks the speaker.
       text = line
@@ -251,3 +337,44 @@ export function buildSrt(words, { clipStart = 0, clipEnd = Infinity, maxWordsPer
     })
     .join("\n");
 }
+
+/**
+ * WebVTT export.
+ *
+ * Same cues as SRT, different time punctuation and a WEBVTT header. Browsers
+ * take VTT natively via <track>, which is what makes an in-page caption
+ * preview possible without burning anything in.
+ */
+export function buildVtt(words, { clipStart = 0, clipEnd = Infinity, maxWordsPerLine = 7 } = {}) {
+  const windowed = words
+    .filter((w) => w.end > clipStart && w.start < clipEnd)
+    .map((w) => ({
+      w: String(w.w),
+      start: Math.max(0, w.start - clipStart),
+      end: Math.max(0, Math.min(w.end, clipEnd) - clipStart),
+    }))
+    .filter((w) => w.end > w.start);
+
+  const vttTime = (seconds) => {
+    const ms = Math.round(seconds * 1000);
+    const pad = (n, len = 2) => String(n).padStart(len, "0");
+    // VTT uses a dot before milliseconds where SRT uses a comma.
+    return `${pad(Math.floor(ms / 3600000))}:${pad(Math.floor(ms / 60000) % 60)}:${pad(
+      Math.floor(ms / 1000) % 60
+    )}.${pad(ms % 1000, 3)}`;
+  };
+
+  const cues = groupWords(windowed, { maxWordsPerLine }).map((line, index) => {
+    const text = line.map((w) => w.w).join(" ");
+    return `${index + 1}\n${vttTime(line[0].start)} --> ${vttTime(line[line.length - 1].end)}\n${text}\n`;
+  });
+
+  return `WEBVTT\n\n${cues.join("\n")}`;
+}
+
+/** Every caption format we can emit, for the download UI. */
+export const CAPTION_FORMATS = {
+  srt: { extension: "srt", contentType: "application/x-subrip", build: buildSrt },
+  vtt: { extension: "vtt", contentType: "text/vtt", build: buildVtt },
+  ass: { extension: "ass", contentType: "text/plain", build: buildAss },
+};

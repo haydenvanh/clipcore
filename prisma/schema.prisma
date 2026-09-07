@@ -332,6 +332,12 @@ model Transcript {
   /// karaoke and word-by-word captions possible — sentence-level timings cannot.
   words Json?
 
+  /// True once a human has corrected the transcript in the captions editor.
+  /// Renders read the edited words, and re-running transcription must not
+  /// silently discard someone's corrections.
+  edited     Boolean   @default(false)
+  editedAt   DateTime?
+
   /// Large transcripts live in object storage; `words` holds them inline only
   /// while they are small.
   storageKey String?
@@ -402,6 +408,7 @@ enum CaptionStyle {
   ANIMATED
   KARAOKE
   WORD_BY_WORD
+  TIKTOK
 }
 
 /// One exported file. A clip renders to many rows — 9:16 for TikTok, 1:1 for
@@ -416,6 +423,12 @@ model Render {
   preset       PlatformPreset @default(TIKTOK)
   captionStyle CaptionStyle   @default(KARAOKE)
   captionLang  String         @default("en")
+
+  /// Per-render caption customization: font, size, colours, background,
+  /// position. Null means "use the style's preset unchanged". Stored on the
+  /// render rather than the clip because the same clip can be exported with
+  /// different looks for different platforms.
+  captionConfig Json?
 
   storageKey   String?
   thumbnailKey String?

@@ -49,28 +49,30 @@
 }
 
 /* Premium Visual Themes Override Definitions */
+/* Neutral, product-first. Greys carry the interface; the accent appears only
+   on the primary action and on active state — roughly 2% of the pixels. */
 [data-theme="slate-indigo"] {
-  --bg-page: #09090b;
-  --bg-card: #18181b;
-  --bg-card-hover: #27272a;
-  --bg-elevated: #202024;
-  --divider: #3f3f46;
-  --primary: #8b5cf6;
-  --primary-hover: #7c3aed;
-  --primary-text: #f4f4f5;
-  --secondary-text: #a1a1aa;
+  --bg-page: #08090a;
+  --bg-card: #0e0f11;
+  --bg-card-hover: #16171a;
+  --bg-elevated: #121316;
+  --divider: #202227;
+  --primary: #5e6ad2;
+  --primary-hover: #6a75d8;
+  --primary-text: #f7f8f8;
+  --secondary-text: #8a8f98;
   --primary-btn-text: #ffffff;
-  
-  --primary-500: #8b5cf6;
-  --primary-600: #7c3aed;
-  --secondary-500: #ec4899;
-  --secondary-600: #db2777;
-  --glass-bg: rgba(24, 24, 27, 0.6);
-  --glass-border: rgba(63, 63, 70, 0.4);
-  --glass-hover: rgba(63, 63, 70, 0.6);
-  --muted: #a1a1aa;
-  --foreground: #f4f4f5;
-  --solid-bg: #202024;
+
+  --primary-500: #5e6ad2;
+  --primary-600: #4c58bd;
+  --secondary-500: #8a8f98;
+  --secondary-600: #6f747c;
+  --glass-bg: rgba(14, 15, 17, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.07);
+  --glass-hover: rgba(255, 255, 255, 0.04);
+  --muted: #8a8f98;
+  --foreground: #f7f8f8;
+  --solid-bg: #121316;
 }
 
 [data-theme="cyberpunk"] {
@@ -229,15 +231,80 @@
   animation: pulseGlow 2s infinite ease-in-out;
 }
 
-@keyframes gradientX {
-  0%, 100% {
-    background-position: 0% 50%;
+/* ─── Surfaces and motion ────────────────────────────────────────────────────
+   Motion is limited to entrance fades and state transitions; nothing loops and
+   nothing decorates. Everything here is disabled under prefers-reduced-motion
+   at the end of this file. */
+
+.glass-card {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-divider);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translate3d(0, 16px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+
+.animate-fade-up {
+  animation: fadeUp 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Accessibility: decorative motion is switched off entirely, and anything
+   mid-animation is settled to its final state rather than frozen part-way. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up,
+  .animate-pulse-glow {
+    animation: none !important;
   }
-  50% {
-    background-position: 100% 50%;
+  .animate-fade-up { opacity: 1; transform: none; }
+
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
-.animate-gradient-x {
-  animation: gradientX 6s ease infinite;
+/* ─── Product-first surfaces ─────────────────────────────────────────────────
+   Two surface treatments, used consistently: `panel` for content, `well` for
+   anything recessed. No blur, no gradient — depth comes from a 1px border and
+   a background step, the way Linear and Stripe do it. */
+
+.panel {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-divider);
+  border-radius: 12px;
+}
+
+.well {
+  background: var(--color-bg-page);
+  border: 1px solid var(--color-divider);
+  border-radius: 10px;
+}
+
+/* A single hairline that fades at both ends — the only decorative element kept. */
+.hairline {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-divider), transparent);
+}
+
+/* Focus ring, applied uniformly so keyboard users get one predictable signal. */
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-bg-page), 0 0 0 4px var(--color-primary);
+}
+
+@layer base {
+  /* Tighter tracking on headings is most of what separates "template" from
+     "designed" at large sizes. */
+  h1, h2, h3 {
+    letter-spacing: -0.022em;
+  }
+  /* Numerals in tables and metrics must not jitter as values change. */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
 }

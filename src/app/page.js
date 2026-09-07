@@ -1,6 +1,8 @@
 import { Toaster } from "react-hot-toast";
 import Hero from "@/components/landing/Hero";
 import DemoVideo from "@/components/landing/DemoVideo";
+import ProductShowcase from "@/components/landing/ProductShowcase";
+import Teams from "@/components/landing/Teams";
 import HowItWorks from "@/components/landing/HowItWorks";
 import Features from "@/components/landing/Features";
 import Comparison from "@/components/landing/Comparison";
@@ -49,10 +51,11 @@ export default function LandingPage() {
 
       <main className="flex-1">
         <Hero />
-        <DemoVideo />
+        <ProductShowcase />
         <HowItWorks />
         <Features />
         <Comparison />
+        <Teams />
         <Testimonials />
 
         <section id="pricing" className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-20 scroll-mt-24">

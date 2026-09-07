@@ -1,0 +1,7 @@
+<!-- ClipCore — for dark backgrounds -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 24" fill="none">
+  <path d="M3 8.5V5a2 2 0 0 1 2-2h3.5" stroke="#FFFFFF" stroke-width="2.25" stroke-linecap="square"/>
+  <path d="M21 15.5V19a2 2 0 0 1-2 2h-3.5" stroke="#FFFFFF" stroke-width="2.25" stroke-linecap="square"/>
+  <rect x="8.5" y="8.5" width="7" height="7" rx="1.25" fill="#FFFFFF"/>
+  <text x="32" y="17" font-family="Inter, system-ui, sans-serif" font-size="15.5" font-weight="600" letter-spacing="-0.2" fill="#FFFFFF">ClipCore</text>
+</svg>

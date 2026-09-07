@@ -1,66 +1,63 @@
 import Link from "next/link";
-import { FaArrowRight, FaBolt } from "react-icons/fa";
+import { FiArrowRight } from "react-icons/fi";
+import HeroGenerator from "./HeroGenerator";
+import ProductFrame from "./ProductFrame";
 
+/**
+ * Product-first hero.
+ *
+ * The interface appears before the marketing copy: someone evaluating a tool
+ * wants to see the tool. The headline is one line, the sub is one sentence, and
+ * everything else on this screen is the product itself.
+ */
 export default function Hero() {
   return (
-    <section className="relative overflow-hidden">
-      {/* Ambient glow. Pointer-events off so it never eats a click. */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 -z-10 opacity-70"
-        style={{
-          background:
-            "radial-gradient(60rem 30rem at 50% -10%, var(--color-primary), transparent 65%)",
-          maskImage: "linear-gradient(to bottom, black, transparent 75%)",
-          WebkitMaskImage: "linear-gradient(to bottom, black, transparent 75%)",
-          filter: "blur(60px)",
-        }}
-      />
+    <section className="relative pt-16 sm:pt-24 pb-16">
+      <div className="max-w-5xl mx-auto px-5 sm:px-6 lg:px-8">
+        <div className="max-w-2xl">
+          <h1 className="animate-fade-up text-[2.5rem] sm:text-[3.5rem] font-semibold leading-[1.05] text-primary-text">
+            Long video in.
+            <br />
+            <span className="text-secondary-text">Short clips out.</span>
+          </h1>
 
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-20 pb-16 text-center flex flex-col items-center gap-7">
-        <Link
-          href="/pricing"
-          className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-primary/25 bg-primary/10 text-primary hover:bg-primary/15 transition-colors"
-        >
-          <FaBolt className="text-[10px]" />
-          <span className="text-[11px] font-black uppercase tracking-widest">
-            1 credit = 1 minute · from $9.99
-          </span>
-        </Link>
-
-        <h1 className="text-4xl sm:text-6xl font-black tracking-tight leading-[1.05] max-w-4xl">
-          Your two-hour podcast.
-          <br />
-          <span className="bg-gradient-to-r from-primary via-secondary to-primary bg-clip-text text-transparent animate-gradient-x bg-[length:200%_auto]">
-            Not a two-minute cap.
-          </span>
-        </h1>
-
-        <p className="text-base sm:text-lg text-secondary-text max-w-2xl leading-relaxed">
-          ClipCore watches your long-form video, finds the moments worth posting, and cuts them
-          into captioned clips for TikTok, Reels, and Shorts. Every clip comes with a viral score
-          and the reasoning behind it — so you can see why it was chosen.
-        </p>
-
-        <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
-          <Link
-            href="/dashboard"
-            className="group inline-flex items-center gap-2 bg-primary hover:bg-primary-hover text-white px-7 py-3.5 rounded-full text-sm font-bold shadow-lg shadow-primary/25 transition-all active:scale-[0.98]"
+          <p
+            className="animate-fade-up mt-5 text-base sm:text-lg text-secondary-text leading-relaxed max-w-xl"
+            style={{ animationDelay: "60ms" }}
           >
-            Clip your first video free
-            <FaArrowRight className="text-xs transition-transform group-hover:translate-x-0.5" />
-          </Link>
-          <Link
-            href="#how-it-works"
-            className="inline-flex items-center gap-2 border border-divider hover:border-primary/40 hover:bg-bg-card px-7 py-3.5 rounded-full text-sm font-bold text-primary-text transition-colors"
+            ClipCore transcribes your video, scores every moment, and returns captioned
+            clips — with the reasoning behind each pick.
+          </p>
+
+          <div
+            className="animate-fade-up mt-7 flex flex-wrap items-center gap-3"
+            style={{ animationDelay: "120ms" }}
           >
-            See how it works
-          </Link>
+            <Link
+              href="/dashboard"
+              className="focus-ring group inline-flex items-center gap-2 rounded-lg bg-primary hover:bg-primary-hover px-5 py-2.5 text-sm font-medium text-white transition-colors"
+            >
+              Start free
+              <FiArrowRight className="text-sm transition-transform group-hover:translate-x-0.5" />
+            </Link>
+            <Link
+              href="/pricing"
+              className="focus-ring inline-flex items-center rounded-lg border border-divider hover:bg-bg-card px-5 py-2.5 text-sm font-medium text-primary-text transition-colors"
+            >
+              Pricing
+            </Link>
+            <span className="text-xs text-secondary-text">10 free credits, no card</span>
+          </div>
         </div>
 
-        <p className="text-[11px] text-secondary-text uppercase tracking-widest font-bold pt-1">
-          10 free credits · no card required · no watermark
-        </p>
+        {/* The product, immediately. */}
+        <div className="animate-fade-up mt-14" style={{ animationDelay: "180ms" }}>
+          <ProductFrame />
+        </div>
+
+        <div className="animate-fade-up mt-10 max-w-2xl" style={{ animationDelay: "240ms" }}>
+          <HeroGenerator />
+        </div>
       </div>
     </section>
   );
