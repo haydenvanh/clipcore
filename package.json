@@ -1,5 +1,5 @@
 {
-  "name": "aiclips-generator",
+  "name": "clipcore",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -43,5 +43,6 @@
     "prisma": "^7.7.0",
     "tailwindcss": "^4",
     "vitest": "^3.2.7"
-  }
+  },
+  "description": "Turn one long video into captioned, platform-ready clips."
 }
