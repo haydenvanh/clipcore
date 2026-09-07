@@ -13,6 +13,7 @@ const db = {
   grants: [],
   transactions: [],
   subscriptions: new Map(),
+  nextGrants: [],
 };
 
 const prisma = {
@@ -28,9 +29,14 @@ const prisma = {
   subscription: {
     findFirst: vi.fn(async () => null),
     updateMany: vi.fn(async () => ({ count: 1 })),
+    // Called after a paid invoice to schedule the next monthly credit grant.
+    update: vi.fn(async ({ data }) => {
+      db.nextGrants.push(data.nextCreditGrantAt);
+      return data;
+    }),
     upsert: vi.fn(async ({ create }) => {
       db.subscriptions.set(create.stripeSubscriptionId, create);
-      return create;
+      return { id: "sub_row_1", ...create };
     }),
   },
   user: { findUnique: vi.fn(async () => ({ id: "user_1", credits: 0 })), update: vi.fn() },
@@ -97,6 +103,7 @@ describe("Stripe webhook idempotency", () => {
     db.seenEvents.clear();
     db.grants.length = 0;
     db.transactions.length = 0;
+    db.nextGrants.length = 0;
   });
 
   it("grants credits once for a first delivery", async () => {
@@ -135,6 +142,23 @@ describe("Stripe webhook idempotency", () => {
     await BillingService.handleWebhook("{}", "sig");
     expect(db.grants).toHaveLength(1);
     expect(db.grants[0].key).toBe("invoice:in_1");
+  });
+
+  it("schedules the next monthly grant a month out", async () => {
+    await BillingService.handleWebhook("{}", "sig");
+
+    expect(db.nextGrants).toHaveLength(1);
+    const next = db.nextGrants[0];
+    const daysAway = (next.getTime() - Date.now()) / 86_400_000;
+    // Between 28 and 31 days, whatever month it is.
+    expect(daysAway).toBeGreaterThan(27);
+    expect(daysAway).toBeLessThan(32);
+  });
+
+  it("grants one month of credits on an annual invoice, not twelve", async () => {
+    await BillingService.handleWebhook("{}", "sig");
+    // PRO is 300/month. An annual subscriber must not receive 3600 up front.
+    expect(db.grants[0].amount).toBe(300);
   });
 
   it("propagates a signature failure instead of accepting the payload", async () => {

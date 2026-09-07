@@ -8,13 +8,19 @@ export const POST = handler("BILLING_CHECKOUT", async (req) => {
   const user = await requireUser();
   await enforceRateLimit("billing", user.id);
 
-  const { planId } = await readJson(req);
+  const { planId, interval } = await readJson(req);
   const plan = getPlan(planId);
   if (!plan) {
     throw new ApiError(400, "Choose one of: Basic, Pro, or Ultra.");
   }
 
-  const { url, changedExisting } = await BillingService.createCheckoutSession(user.id, plan.id);
+  const billingInterval = interval === "YEAR" ? "YEAR" : "MONTH";
+
+  const { url, changedExisting } = await BillingService.createCheckoutSession(
+    user.id,
+    plan.id,
+    billingInterval
+  );
   if (!url) throw new ApiError(502, "Stripe did not return a checkout URL.");
 
   // An existing subscriber is sent to the Portal instead, where Stripe handles

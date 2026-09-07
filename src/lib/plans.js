@@ -72,6 +72,75 @@ export const PLANS = {
 
 export const PLAN_ORDER = ["BASIC", "PRO", "ULTRA"];
 
+/**
+ * Annual pricing: pay for ten months, get twelve.
+ *
+ * Two reasons it is worth offering. Cash arrives up front, which matters more
+ * than margin to a bootstrapped business; and Stripe's $0.30 fixed fee is paid
+ * once instead of twelve times, which on a $9.99 plan is most of the discount
+ * paying for itself.
+ *
+ * Credits are still granted monthly (see BillingService) — annual changes when
+ * we are paid, not how much anyone can spend in a month.
+ */
+export const ANNUAL_PRICES = {
+  BASIC: { priceCents: 9900, priceLabel: "$99" },
+  PRO: { priceCents: 14900, priceLabel: "$149" },
+  ULTRA: { priceCents: 29900, priceLabel: "$299" },
+};
+
+export const INTERVALS = { MONTH: "MONTH", YEAR: "YEAR" };
+
+/** Monthly-equivalent cost of the annual plan, for the pricing table. */
+export function annualMonthlyEquivalent(planId) {
+  const annual = ANNUAL_PRICES[planId];
+  if (!annual) return null;
+  return Math.round(annual.priceCents / 12);
+}
+
+/** How much a year of annual saves against twelve monthly payments. */
+export function annualSaving(planId) {
+  const plan = PLANS[planId];
+  const annual = ANNUAL_PRICES[planId];
+  if (!plan || !annual) return null;
+
+  const twelveMonthly = plan.priceCents * 12;
+  const saved = twelveMonthly - annual.priceCents;
+
+  return {
+    savedCents: saved,
+    savedLabel: `$${Math.round(saved / 100)}`,
+    percent: Math.round((saved / twelveMonthly) * 100),
+    monthsFree: Math.round((saved / plan.priceCents) * 10) / 10,
+  };
+}
+
+/** Price and label for a plan at a given interval. */
+export function priceFor(planId, interval = INTERVALS.MONTH) {
+  const plan = PLANS[planId];
+  if (!plan) return null;
+
+  if (interval === INTERVALS.YEAR) {
+    const annual = ANNUAL_PRICES[planId];
+    if (!annual) return null;
+    return {
+      priceCents: annual.priceCents,
+      priceLabel: annual.priceLabel,
+      per: "year",
+      monthlyEquivalentCents: annualMonthlyEquivalent(planId),
+      saving: annualSaving(planId),
+    };
+  }
+
+  return {
+    priceCents: plan.priceCents,
+    priceLabel: plan.priceLabel,
+    per: "month",
+    monthlyEquivalentCents: plan.priceCents,
+    saving: null,
+  };
+}
+
 /** Limits for a signed-in user with no active subscription. */
 export const FREE_TIER = {
   id: "FREE",
@@ -85,20 +154,29 @@ export const FREE_TIER = {
  * Stripe price ids, per plan. Set these in the environment — hardcoding them
  * makes test and live mode impossible to run side by side.
  */
-export function stripePriceId(planId) {
-  const ids = {
+export function stripePriceId(planId, interval = "MONTH") {
+  const monthly = {
     BASIC: process.env.STRIPE_PRICE_BASIC,
     PRO: process.env.STRIPE_PRICE_PRO,
     ULTRA: process.env.STRIPE_PRICE_ULTRA,
   };
-  return ids[planId];
+  const annual = {
+    BASIC: process.env.STRIPE_PRICE_BASIC_ANNUAL,
+    PRO: process.env.STRIPE_PRICE_PRO_ANNUAL,
+    ULTRA: process.env.STRIPE_PRICE_ULTRA_ANNUAL,
+  };
+  return (interval === "YEAR" ? annual : monthly)[planId];
 }
 
-/** Resolve a Stripe price id back to the plan it belongs to. */
+/**
+ * Resolve a Stripe price id back to its plan and interval.
+ * Checks both intervals, so an annual subscription is attributed correctly.
+ */
 export function planFromPriceId(priceId) {
   if (!priceId) return null;
   for (const id of PLAN_ORDER) {
-    if (stripePriceId(id) === priceId) return PLANS[id];
+    if (stripePriceId(id, "MONTH") === priceId) return { ...PLANS[id], interval: "MONTH" };
+    if (stripePriceId(id, "YEAR") === priceId) return { ...PLANS[id], interval: "YEAR" };
   }
   return null;
 }

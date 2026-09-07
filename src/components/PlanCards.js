@@ -3,21 +3,27 @@
 import { useSession } from "next-auth/react";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { FaCheck } from "react-icons/fa";
+import { FiCheck } from "react-icons/fi";
 import toast from "react-hot-toast";
-import { publicPlans } from "@/lib/plans";
+import { publicPlans, priceFor, annualSaving } from "@/lib/plans";
 
 const PLANS = publicPlans();
 
 /**
- * The pricing cards, shared by the landing page section and /pricing so the two
- * can never drift apart. Plans come from lib/plans.js, the same module the
- * checkout endpoint validates against.
+ * Pricing cards with a monthly/annual toggle.
+ *
+ * Both prices are shown honestly: the annual card states the yearly total *and*
+ * the monthly equivalent. Advertising "$8/mo" when the charge is $99 once is
+ * the pattern this product's positioning explicitly rejects — see
+ * docs/PRICING_STRATEGY.md.
  */
 export default function PlanCards({ compact = false }) {
   const { status } = useSession();
   const router = useRouter();
   const [loadingPlan, setLoadingPlan] = useState(null);
+  const [interval, setInterval] = useState("MONTH");
+
+  const isAnnual = interval === "YEAR";
 
   const handleCheckout = async (planId) => {
     if (status !== "authenticated") {
@@ -30,7 +36,7 @@ export default function PlanCards({ compact = false }) {
       const res = await fetch("/api/billing/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planId }),
+        body: JSON.stringify({ planId, interval }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not start checkout.");
@@ -45,67 +51,127 @@ export default function PlanCards({ compact = false }) {
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-5xl mx-auto items-start">
-      {PLANS.map((plan) => (
+    <div className="w-full">
+      {/* Interval toggle */}
+      <div className="flex justify-center mb-8">
         <div
-          key={plan.id}
-          className={`relative bg-bg-card border rounded-2xl p-7 flex flex-col gap-6 transition-all duration-300 hover:-translate-y-1 ${
-            plan.popular
-              ? "border-primary shadow-2xl shadow-primary/10 md:scale-105"
-              : "border-divider/60 shadow-md"
-          }`}
+          role="radiogroup"
+          aria-label="Billing interval"
+          className="inline-flex items-center gap-1 rounded-lg border border-divider bg-bg-card p-1"
         >
-          {plan.popular && (
-            <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-primary text-white text-[9px] font-black uppercase px-3 py-1 rounded-full tracking-wider shadow">
-              Most popular
-            </span>
-          )}
-
-          <div className="space-y-3">
-            <h3 className="text-sm font-extrabold uppercase tracking-wide">{plan.name}</h3>
-            <div className="flex items-baseline gap-1">
-              <span className="text-4xl font-black tracking-tight">{plan.priceLabel}</span>
-              <span className="text-xs text-secondary-text font-semibold">/month</span>
-            </div>
-            <p className="text-xs text-secondary-text leading-relaxed min-h-[2.5rem]">
-              {plan.tagline}
-            </p>
-          </div>
-
-          <div className="bg-bg-page/60 border border-divider/40 rounded-lg p-3 text-center">
-            <div className="text-xl font-black text-primary">{plan.credits}</div>
-            <div className="text-[10px] font-bold uppercase tracking-widest text-secondary-text">
-              minutes / month
-            </div>
-            <div className="text-[10px] text-secondary-text mt-1">
-              ${(plan.priceCents / 100 / plan.credits).toFixed(3)} per minute
-            </div>
-          </div>
-
-          {!compact && (
-            <ul className="space-y-2.5 text-xs font-medium text-secondary-text flex-1">
-              {plan.features.map((feature) => (
-                <li key={feature} className="flex items-start gap-2">
-                  <FaCheck className="text-primary text-[10px] mt-0.5 shrink-0" />
-                  <span>{feature}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <button
-            onClick={() => handleCheckout(plan.id)}
-            disabled={loadingPlan !== null}
-            className={`w-full py-3 rounded-full text-xs font-bold transition-all shadow-md cursor-pointer active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed ${
-              plan.popular
-                ? "bg-primary text-white hover:bg-primary-hover shadow-primary/20"
-                : "bg-bg-page hover:bg-bg-card-hover text-primary-text border border-divider"
-            }`}
-          >
-            {loadingPlan === plan.id ? "Opening checkout…" : `Get ${plan.name}`}
-          </button>
+          {[
+            { id: "MONTH", label: "Monthly" },
+            { id: "YEAR", label: "Annual" },
+          ].map((option) => {
+            const active = interval === option.id;
+            return (
+              <button
+                key={option.id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => setInterval(option.id)}
+                className={`focus-ring inline-flex items-center gap-2 rounded-md px-4 py-1.5 text-[13px] font-medium transition-colors cursor-pointer ${
+                  active
+                    ? "bg-bg-card-hover text-primary-text"
+                    : "text-secondary-text hover:text-primary-text"
+                }`}
+              >
+                {option.label}
+                {option.id === "YEAR" && (
+                  <span className="rounded bg-[#4ade80]/15 px-1.5 py-0.5 text-[10px] font-medium text-[#4ade80]">
+                    2 months free
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
-      ))}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5 w-full max-w-4xl mx-auto items-start">
+        {PLANS.map((plan) => {
+          const price = priceFor(plan.id, interval);
+          const saving = annualSaving(plan.id);
+
+          return (
+            <div
+              key={plan.id}
+              className={`panel p-6 flex flex-col gap-5 transition-colors ${
+                plan.popular ? "border-primary/40" : ""
+              }`}
+            >
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-[15px] font-medium text-primary-text">{plan.name}</h3>
+                  {plan.popular && (
+                    <span className="rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                      Popular
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-3 flex items-baseline gap-1.5">
+                  <span className="text-[2.25rem] font-semibold tracking-tight text-primary-text tabular-nums">
+                    {price.priceLabel}
+                  </span>
+                  <span className="text-sm text-secondary-text">/{price.per}</span>
+                </div>
+
+                {isAnnual ? (
+                  <p className="mt-1.5 text-xs text-secondary-text">
+                    ${(price.monthlyEquivalentCents / 100).toFixed(2)}/mo equivalent · save{" "}
+                    <span className="text-[#4ade80]">{saving.savedLabel}</span> ({saving.percent}%)
+                  </p>
+                ) : (
+                  <p className="mt-1.5 text-xs text-secondary-text">Billed monthly, cancel any time</p>
+                )}
+
+                <p className="mt-3 text-[13px] text-secondary-text leading-relaxed min-h-[2.5rem]">
+                  {plan.tagline}
+                </p>
+              </div>
+
+              <div className="well p-3 text-center">
+                <div className="text-lg font-semibold text-primary-text tabular-nums">
+                  {plan.credits}
+                </div>
+                <div className="text-[11px] text-secondary-text">minutes every month</div>
+              </div>
+
+              {!compact && (
+                <ul className="space-y-2 text-[13px] flex-1">
+                  {plan.features.map((feature) => (
+                    <li key={feature} className="flex items-start gap-2">
+                      <FiCheck className="text-primary text-xs mt-1 shrink-0" aria-hidden />
+                      <span className="text-secondary-text">{feature}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <button
+                onClick={() => handleCheckout(plan.id)}
+                disabled={loadingPlan !== null}
+                className={`focus-ring w-full rounded-lg py-2.5 text-[13px] font-medium transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
+                  plan.popular
+                    ? "bg-primary hover:bg-primary-hover text-white"
+                    : "border border-divider hover:bg-bg-card-hover text-primary-text"
+                }`}
+              >
+                {loadingPlan === plan.id ? "Opening checkout…" : `Get ${plan.name}`}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {isAnnual && (
+        <p className="mt-6 text-center text-xs text-secondary-text max-w-lg mx-auto">
+          Annual plans are charged once. Credits still arrive monthly — the same allowance,
+          so a year of credits can&apos;t be spent in a weekend.
+        </p>
+      )}
     </div>
   );
 }

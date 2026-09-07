@@ -11,6 +11,9 @@ CREATE TYPE "SubscriptionStatus" AS ENUM ('ACTIVE', 'TRIALING', 'PAST_DUE', 'CAN
 CREATE TYPE "PlanId" AS ENUM ('BASIC', 'PRO', 'ULTRA');
 
 -- CreateEnum
+CREATE TYPE "BillingInterval" AS ENUM ('MONTH', 'YEAR');
+
+-- CreateEnum
 CREATE TYPE "LedgerEntryType" AS ENUM ('GRANT', 'HOLD', 'SETTLE', 'REFUND', 'EXPIRE', 'ADJUST');
 
 -- CreateEnum
@@ -124,7 +127,9 @@ CREATE TABLE "Subscription" (
     "stripePriceId" TEXT NOT NULL,
     "plan" "PlanId" NOT NULL,
     "status" "SubscriptionStatus" NOT NULL,
+    "interval" "BillingInterval" NOT NULL DEFAULT 'MONTH',
     "creditsPerPeriod" INTEGER NOT NULL,
+    "nextCreditGrantAt" TIMESTAMP(3),
     "currentPeriodStart" TIMESTAMP(3) NOT NULL,
     "currentPeriodEnd" TIMESTAMP(3) NOT NULL,
     "cancelAtPeriodEnd" BOOLEAN NOT NULL DEFAULT false,
@@ -433,6 +438,9 @@ CREATE INDEX "Subscription_userId_status_idx" ON "Subscription"("userId", "statu
 
 -- CreateIndex
 CREATE INDEX "Subscription_currentPeriodEnd_idx" ON "Subscription"("currentPeriodEnd");
+
+-- CreateIndex
+CREATE INDEX "Subscription_status_nextCreditGrantAt_idx" ON "Subscription"("status", "nextCreditGrantAt");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "CreditLedger_idempotencyKey_key" ON "CreditLedger"("idempotencyKey");

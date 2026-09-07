@@ -47,6 +47,16 @@ function subscriptionIdFromInvoice(invoice) {
   );
 }
 
+/** Add whole months, clamping to the last day of a shorter month. */
+function addMonths(date, count) {
+  const result = new Date(date);
+  const targetDay = result.getDate();
+  result.setMonth(result.getMonth() + count);
+  // 31 Jan + 1 month must not roll into 3 March.
+  if (result.getDate() < targetDay) result.setDate(0);
+  return result;
+}
+
 function periodFromSubscription(subscription) {
   const item = subscription.items?.data?.[0];
   const start =
@@ -89,13 +99,16 @@ export const BillingService = {
    * instead — Stripe handles proration, upgrades, and downgrades far better
    * than a second checkout would, and it avoids two live subscriptions.
    */
-  async createCheckoutSession(userId, planId) {
+  async createCheckoutSession(userId, planId, interval = "MONTH") {
     const plan = getPlan(planId);
     if (!plan) throw new Error(`Unknown plan: ${planId}`);
 
-    const priceId = stripePriceId(plan.id);
+    const billingInterval = interval === "YEAR" ? "YEAR" : "MONTH";
+    const priceId = stripePriceId(plan.id, billingInterval);
     if (!priceId) {
-      throw new Error(`STRIPE_PRICE_${plan.id} is not configured`);
+      throw new Error(
+        `STRIPE_PRICE_${plan.id}${billingInterval === "YEAR" ? "_ANNUAL" : ""} is not configured`
+      );
     }
 
     const existing = await this.getActiveSubscription(userId);
@@ -115,8 +128,8 @@ export const BillingService = {
       cancel_url: `${config.auth.url}/pricing?checkout=canceled`,
       // Carried onto the subscription so webhooks can attribute it without a
       // customer lookup.
-      subscription_data: { metadata: { userId, planId: plan.id } },
-      metadata: { userId, planId: plan.id },
+      subscription_data: { metadata: { userId, planId: plan.id, interval: billingInterval } },
+      metadata: { userId, planId: plan.id, interval: billingInterval },
     });
 
     return { url: session.url, changedExisting: false };
@@ -130,6 +143,57 @@ export const BillingService = {
       return_url: `${config.auth.url}/dashboard/billing`,
     });
     return session.url;
+  },
+
+  /**
+   * Grant the monthly credit allowance to annual subscribers who are due.
+   *
+   * Monthly plans get their credits from invoice.paid; annual plans only see
+   * one invoice a year, so this is what keeps their allowance arriving. Run it
+   * from a scheduled job — it is idempotent per subscription per month, so a
+   * double run grants nothing extra.
+   */
+  async grantDueCredits({ now = new Date(), limit = 200 } = {}) {
+    const due = await prisma.subscription.findMany({
+      where: {
+        status: { in: ["ACTIVE", "TRIALING"] },
+        interval: "YEAR",
+        nextCreditGrantAt: { lte: now },
+        currentPeriodEnd: { gte: now },
+      },
+      take: limit,
+    });
+
+    const granted = [];
+
+    for (const subscription of due) {
+      const plan = getPlan(subscription.plan);
+      const credits = subscription.creditsPerPeriod || plan?.credits || 0;
+      // The month key makes the grant idempotent: a retry inside the same
+      // month is a no-op rather than a second allowance.
+      const monthKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+
+      try {
+        await CreditService.grant(subscription.userId, credits, {
+          type: "GRANT",
+          refType: "subscription",
+          refId: subscription.id,
+          idempotencyKey: `annual:${subscription.id}:${monthKey}`,
+          description: `${plan?.name ?? subscription.plan} monthly allowance`,
+        });
+
+        await prisma.subscription.update({
+          where: { id: subscription.id },
+          data: { nextCreditGrantAt: addMonths(now, 1) },
+        });
+
+        granted.push({ subscriptionId: subscription.id, credits });
+      } catch (error) {
+        console.error("[BILLING] Monthly grant failed", subscription.id, error.message);
+      }
+    }
+
+    return { checked: due.length, granted };
   },
 
   async getActiveSubscription(userId) {
@@ -239,6 +303,9 @@ export const BillingService = {
     const plan = getPlan(record.plan);
     const credits = record.creditsPerPeriod || plan?.credits || 0;
 
+    // One month's worth, even on an annual invoice. Handing over twelve months
+    // of credits on day one lets a user spend the year's allowance in a
+    // weekend at 0% margin; the rest arrive from the monthly grant cron.
     await CreditService.grant(record.userId, credits, {
       type: "GRANT",
       refType: "invoice",
@@ -246,6 +313,12 @@ export const BillingService = {
       // One grant per invoice, forever, however many times it is delivered.
       idempotencyKey: `invoice:${invoice.id}`,
       description: `${plan?.name ?? record.plan} plan — ${credits} credits`,
+    });
+
+    // Schedule the next monthly grant a month out, for both intervals.
+    await prisma.subscription.update({
+      where: { id: record.id },
+      data: { nextCreditGrantAt: addMonths(new Date(), 1) },
     });
 
     await prisma.transaction.create({
@@ -327,6 +400,11 @@ export const BillingService = {
       return null;
     }
 
+    // Trust the price id over metadata: metadata is set at checkout and goes
+    // stale the moment someone switches plans in the Customer Portal.
+    const interval =
+      plan.interval ?? (subscription.items?.data?.[0]?.price?.recurring?.interval === "year" ? "YEAR" : "MONTH");
+
     const { start, end } = periodFromSubscription(subscription);
     const status = STATUS_MAP[subscription.status] ?? "INCOMPLETE";
 
@@ -336,6 +414,7 @@ export const BillingService = {
       stripePriceId: priceId,
       plan: plan.id,
       status,
+      interval,
       creditsPerPeriod: plan.credits,
       currentPeriodStart: start,
       currentPeriodEnd: end,

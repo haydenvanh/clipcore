@@ -156,6 +156,11 @@ enum PlanId {
   ULTRA
 }
 
+enum BillingInterval {
+  MONTH
+  YEAR
+}
+
 model Subscription {
   id     String @id @default(cuid())
   userId String
@@ -165,9 +170,19 @@ model Subscription {
   plan                 PlanId
   status               SubscriptionStatus
 
-  /// Credits granted at the start of each period, snapshotted so a later
-  /// pricing change does not retroactively alter past grants.
+  /// How often Stripe charges. Credits are granted monthly either way — an
+  /// annual plan bills once but must not hand over twelve months of credits on
+  /// day one, or a user can spend the year's allowance in a weekend at 0%
+  /// margin.
+  interval BillingInterval @default(MONTH)
+
+  /// Credits granted per *month*, snapshotted so a later pricing change does
+  /// not retroactively alter past grants.
   creditsPerPeriod Int
+
+  /// When the next monthly grant is due. Driven by the billing cycle for
+  /// monthly plans and by the credit-grant cron for annual ones.
+  nextCreditGrantAt DateTime?
 
   currentPeriodStart DateTime
   currentPeriodEnd   DateTime
@@ -181,6 +196,7 @@ model Subscription {
 
   @@index([userId, status])
   @@index([currentPeriodEnd])
+  @@index([status, nextCreditGrantAt])
 }
 
 enum LedgerEntryType {
