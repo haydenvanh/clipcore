@@ -81,6 +81,74 @@ staging environment for free (pays down debt item T6).
 Never expose to the browser: anything without a `NEXT_PUBLIC_` prefix. `src/lib/config.js` warns at
 boot for each missing required key.
 
+## 3.1 Getting the values into production
+
+Run the planner — it says which variable goes to which service, and which ones
+must **not** be copied from local:
+
+```bash
+npm run deploy:env             # the plan
+npm run deploy:env -- --commands   # the CLI commands
+```
+
+### Vercel
+
+Either paste them in **Settings → Environment Variables**, or use the CLI:
+
+```bash
+npm i -g vercel
+vercel login
+vercel link                    # connects this folder to a project
+vercel env add NEXTAUTH_SECRET production   # prompts for the value, hidden
+```
+
+To pull production values back down for local debugging:
+
+```bash
+vercel env pull .env.production.local
+```
+
+### Railway (worker)
+
+```bash
+npm i -g @railway/cli
+railway login
+railway link
+railway variables set DATABASE_URL="..." ENCRYPTION_KEY="..."
+```
+
+### Four things that bite
+
+1. **`ENCRYPTION_KEY` must be byte-identical on Vercel and Railway.** The web
+   app encrypts OAuth tokens; the worker decrypts them to publish. Different
+   keys mean publishing fails with a decryption error that looks like nothing
+   else.
+2. **Stripe live-mode webhooks have their own signing secret.** It is not the
+   test one. Reusing the test secret fails signature verification on every
+   event — no credits granted, no error visible to the user.
+3. **`NEXT_PUBLIC_*` is inlined at build time.** Changing it requires a
+   redeploy, not a restart.
+4. **Add the production redirect URI to Google Cloud before the first sign-in**,
+   alongside the localhost one rather than replacing it:
+   `https://<domain>/api/auth/callback/google`
+
+### Order of operations
+
+Do it in this order or you will deploy something that cannot boot:
+
+```
+1. Neon project           → DATABASE_URL, DIRECT_URL
+2. npx prisma migrate deploy   (against production)
+3. Vercel project + env   → deploy once, get the domain
+4. Google Cloud           → add the production redirect URI
+5. Stripe                 → live prices, then the webhook endpoint on the real
+                            domain, then STRIPE_WEBHOOK_SECRET
+6. Railway worker + env   → same DATABASE_URL, same ENCRYPTION_KEY
+```
+
+Step 5 has to come after step 3 because the Stripe webhook endpoint needs a
+real URL to point at.
+
 ## 4. First deploy
 
 ```bash

@@ -10,7 +10,8 @@
     "postinstall": "prisma generate",
     "test": "vitest run",
     "test:watch": "vitest",
-    "doctor": "node scripts/doctor.mjs"
+    "doctor": "node scripts/doctor.mjs",
+    "deploy:env": "node scripts/deploy-env.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
