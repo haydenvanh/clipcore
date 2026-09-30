@@ -3,10 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { prisma } from "../lib/db.js";
 import * as storage from "../lib/storage.js";
-import { probe, downloadSource, normalize, extractAudio, thumbnail, renderClip } from "../lib/ffmpeg.js";
-import { transcribe } from "../lib/transcribe.js";
+import { probe, downloadSource, normalize, extractAudioChunk, thumbnail, renderClip } from "../lib/ffmpeg.js";
+import {
+  transcribeWithRetry, planChunks, mergeChunkResults, isTranscriptionConfigured,
+} from "../lib/transcribe.js";
 import { analyzeTranscript } from "../lib/analyze.js";
 import { buildAss } from "../lib/captions.js";
+import { PermanentError, classifyDownloadError } from "../lib/errors.js";
 
 /**
  * The five pipeline steps, one exported function each.
@@ -29,24 +32,14 @@ async function withTempDir(prefix, fn) {
   }
 }
 
-/** Credits are held on an estimate; this settles against the real duration. */
-async function settleCredits(video, actualDurationSec, CreditService) {
-  const actual = Math.max(1, Math.ceil(actualDurationSec / 60));
-  if (video.creditsHeld === actual) return;
-  await CreditService.settle(video.userId, video.creditsHeld, actual, {
-    refType: "video",
-    refId: video.id,
-  });
-}
-
 /**
  * Step 1 — get the source video and normalize it.
  *
- * Uploads already sit in R2; links are fetched with yt-dlp. Either way the
- * output is one normalized MP4 in our bucket with known duration, which is
- * what every later step assumes.
+ * Uploads are already in storage; links are fetched with yt-dlp. Either way
+ * the output is one normalized MP4 with a known duration, which is what every
+ * later step assumes.
  */
-export async function extract({ videoId }, { CreditService }) {
+export async function extract({ videoId }) {
   const video = await prisma.video.findUnique({ where: { id: videoId } });
   if (!video) throw new Error(`Video ${videoId} not found`);
 
@@ -54,18 +47,23 @@ export async function extract({ videoId }, { CreditService }) {
 
   return withTempDir("extract", async (dir) => {
     const rawPath = path.join(dir, "raw.mp4");
+    let fetchedTitle = null;
 
     if (video.source === "UPLOAD") {
       if (!video.storageKey) throw new Error("Upload has no stored object");
       await storage.download(video.storageKey, rawPath);
     } else {
-      if (!video.sourceUrl) throw new Error("No source URL");
-      await downloadSource(video.sourceUrl, rawPath);
+      if (!video.sourceUrl) throw new PermanentError("This video has no source link.");
+      try {
+        ({ title: fetchedTitle } = await downloadSource(video.sourceUrl, rawPath));
+      } catch (error) {
+        throw classifyDownloadError(error);
+      }
     }
 
     const rawInfo = await probe(rawPath);
     if (!rawInfo.hasAudio) {
-      throw new Error("This video has no audio track, so there is nothing to transcribe.");
+      throw new PermanentError("This video has no audio track, so there is nothing to transcribe.");
     }
 
     const normalizedPath = path.join(dir, "normalized.mp4");
@@ -85,6 +83,8 @@ export async function extract({ videoId }, { CreditService }) {
       data: {
         storageKey: key,
         thumbnailKey: thumbKey,
+        // Keep a title the user set; otherwise use the one YouTube reports.
+        ...(video.title ? {} : fetchedTitle ? { title: fetchedTitle.slice(0, 200) } : {}),
         durationSec: Math.round(info.durationSec),
         sizeBytes: BigInt(Math.round(info.sizeBytes)),
         width: info.width,
@@ -93,30 +93,67 @@ export async function extract({ videoId }, { CreditService }) {
       },
     });
 
-    // Now that the true duration is known, charge for what we will actually do.
-    await settleCredits(video, info.durationSec, CreditService);
-
     return { videoId, durationSec: info.durationSec };
   });
 }
 
-/** Step 2 — transcribe with word-level timings. */
+/** Run async work over items with at most `limit` in flight. */
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const lanes = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index], index);
+    }
+  });
+  await Promise.all(lanes);
+  return results;
+}
+
+/**
+ * Step 2 — transcribe with word-level timings.
+ *
+ * The audio is sent in ten-minute slices rather than as one file: the Whisper
+ * API rejects uploads over 25 MB, which an uncompressed track reaches at about
+ * 13 minutes. The first slice runs alone to detect the language, and the rest
+ * run three at a time with that language pinned, so a slice that happens to be
+ * mostly music is not transcribed as the wrong language.
+ */
 export async function transcribeStep({ videoId }) {
   const video = await prisma.video.findUnique({ where: { id: videoId } });
   if (!video?.storageKey) throw new Error(`Video ${videoId} has no source`);
+
+  if (!isTranscriptionConfigured()) {
+    // Fail with a message that names the fix, not an HTTP 401 from OpenAI.
+    throw new PermanentError("OPENAI_API_KEY is not set in .env, so the audio cannot be transcribed.");
+  }
 
   await prisma.video.update({ where: { id: videoId }, data: { status: "TRANSCRIBING" } });
 
   return withTempDir("transcribe", async (dir) => {
     const videoPath = path.join(dir, "source.mp4");
-    const audioPath = path.join(dir, "audio.wav");
-
     await storage.download(video.storageKey, videoPath);
-    await extractAudio(videoPath, audioPath);
 
-    const result = await transcribe(audioPath);
+    const durationSec = video.durationSec || (await probe(videoPath)).durationSec;
+    const chunks = planChunks(durationSec);
+
+    const transcribeChunk = async (chunk, language) => {
+      const audioPath = path.join(dir, `chunk-${String(chunk.index).padStart(3, "0")}.mp3`);
+      await extractAudioChunk(videoPath, audioPath, chunk);
+      const result = await transcribeWithRetry(audioPath, language ? { language } : {});
+      await fs.promises.rm(audioPath, { force: true });
+      return { startSec: chunk.startSec, result };
+    };
+
+    const [first, ...rest] = chunks;
+    const firstResult = await transcribeChunk(first);
+    const language = firstResult.result.language;
+    const restResults = await mapLimit(rest, 3, (chunk) => transcribeChunk(chunk, language));
+
+    const result = mergeChunkResults([firstResult, ...restResults]);
     if (result.words.length === 0) {
-      throw new Error("No speech was detected in this video.");
+      throw new PermanentError("No speech was detected in this video.");
     }
 
     const key = storage.keys.transcript(videoId);
@@ -144,12 +181,17 @@ export async function transcribeStep({ videoId }) {
 
     await prisma.video.update({ where: { id: videoId }, data: { status: "ANALYZING" } });
 
-    return { videoId, wordCount: result.words.length, language: result.language };
+    return { videoId, wordCount: result.words.length, language: result.language, chunks: chunks.length };
   });
 }
 
 /** Step 3 — find and score the moments worth clipping. */
 export async function analyze({ videoId, targetCount = 10 }) {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    // Fail with a message that names the fix rather than an SDK auth error.
+    throw new PermanentError("ANTHROPIC_API_KEY is not set in .env, so clips cannot be selected.");
+  }
+
   const video = await prisma.video.findUnique({
     where: { id: videoId },
     include: { transcript: true },
@@ -165,7 +207,7 @@ export async function analyze({ videoId, targetCount = 10 }) {
   });
 
   if (moments.length === 0) {
-    throw new Error("No clip-worthy moments were found in this video.");
+    throw new PermanentError("No clip-worthy moments were found in this video.");
   }
 
   // Replace rather than append, so a retry does not duplicate clips.

@@ -1,6 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
+import { pinSslMode } from "./connection-string.js";
 
 /**
  * Prisma client for the worker process.
@@ -9,9 +10,8 @@ import { Pool } from "pg";
  * cannot resolve the "@/" alias. Same schema, same generated client.
  */
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  // The worker is long-lived and concurrency is bounded by WORKER_CONCURRENCY,
-  // so a small pool is plenty and keeps us inside Neon's connection limit.
+  connectionString: pinSslMode(process.env.DATABASE_URL),
+  // Long-lived process with bounded concurrency, so a small pool is plenty.
   max: Number(process.env.WORKER_DB_POOL || 5),
 });
 

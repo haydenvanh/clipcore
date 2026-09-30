@@ -1,19 +1,18 @@
+import "./lib/env.js";
 import { randomUUID } from "node:crypto";
 import { prisma, disconnect } from "./lib/db.js";
 import { extract, transcribeStep, analyze, render } from "./steps/pipeline.js";
-import { publish } from "./steps/publish.js";
-import { CreditService } from "./lib/credits.js";
 
 /**
  * The worker loop.
  *
  * Claims jobs from the Postgres queue with FOR UPDATE SKIP LOCKED, runs the
- * matching step, and chains the next stage. Runs as a long-lived container
- * (Railway/Render) because Vercel functions cannot ship ffmpeg, have no
- * persistent disk, and time out long before a 3-hour podcast is transcoded.
+ * matching step, and chains the next stage. Runs as its own process alongside
+ * the web app (`npm run dev` starts both) because a transcode can run for many
+ * minutes and should not live inside a request.
  */
 
-const WORKER_ID = `${process.env.RAILWAY_REPLICA_ID || process.env.HOSTNAME || "worker"}-${randomUUID().slice(0, 8)}`;
+const WORKER_ID = `worker-${randomUUID().slice(0, 8)}`;
 const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY || 2);
 const POLL_INTERVAL_MS = Number(process.env.WORKER_POLL_MS || 2000);
 const REAP_INTERVAL_MS = 60_000;
@@ -47,7 +46,7 @@ async function claim(limit) {
         LIMIT ${limit}
           FOR UPDATE SKIP LOCKED
      )
-    RETURNING j.id, j.type, j.payload, j.attempts, j."maxAttempts"
+    RETURNING j.id, j.type, j.payload, j.attempts, j."maxAttempts", j."refType", j."refId"
   `;
 }
 
@@ -64,7 +63,7 @@ async function execute(job) {
 
   switch (job.type) {
     case "extract": {
-      const result = await extract(job.payload, { CreditService });
+      const result = await extract(job.payload);
       await enqueue("transcribe", { videoId: result.videoId }, "video", result.videoId);
       return result;
     }
@@ -88,9 +87,6 @@ async function execute(job) {
 
     case "render":
       return render(job.payload);
-
-    case "publish":
-      return publish(job.payload);
 
     default:
       throw new Error(`Unknown job type: ${job.type}`);
@@ -139,7 +135,9 @@ async function complete(jobId) {
 /** Re-queue with backoff, or dead-letter once attempts are exhausted. */
 async function fail(job, error) {
   const message = String(error?.message ?? error).slice(0, 2000);
-  const exhausted = job.attempts >= job.maxAttempts;
+  // Permanent errors (missing key, private video, no speech) skip the retries:
+  // three attempts over several minutes would only delay the same message.
+  const exhausted = job.attempts >= job.maxAttempts || error?.permanent === true;
 
   if (exhausted) {
     await prisma.job.update({
@@ -166,11 +164,10 @@ async function fail(job, error) {
 }
 
 /**
- * Surface a dead job to the user and return their credits.
+ * Surface a dead job in the UI.
  *
  * A job that quietly disappears from the queue while the UI spins forever is
- * worse than an error message, and charging for work we did not deliver is
- * worse still.
+ * worse than an error message.
  */
 async function markSubjectFailed(job, message) {
   try {
@@ -181,23 +178,42 @@ async function markSubjectFailed(job, message) {
           where: { id: job.refId },
           data: { status: "FAILED", error: message },
         });
-        if (video.creditsHeld > 0) {
-          await CreditService.refund(video.userId, video.creditsHeld, {
-            refType: "video",
-            refId: video.id,
-            description: "Processing failed",
-          });
-        }
       }
     } else if (job.refType === "render" && job.refId) {
-      await prisma.render.update({
+      const failed = await prisma.render.update({
         where: { id: job.refId },
         data: { status: "FAILED", error: message },
+        include: { clip: { select: { videoId: true } } },
       });
+      await prisma.clip.update({ where: { id: failed.clipId }, data: { status: "FAILED" } });
+      // One failed render must not leave the whole video "Rendering" forever:
+      // once nothing is still pending, the video is finished either way.
+      await finishVideoIfSettled(failed.clip.videoId);
     }
   } catch (error) {
     log("error", "job.cleanup_failed", { jobId: job.id, error: error.message });
   }
+}
+
+/**
+ * Mark a video COMPLETED once none of its renders are still pending — or
+ * FAILED if every one of them failed.
+ */
+async function finishVideoIfSettled(videoId) {
+  const renders = await prisma.render.findMany({
+    where: { clip: { videoId } },
+    select: { status: true },
+  });
+  if (renders.length === 0) return;
+  if (renders.some((r) => r.status === "PENDING" || r.status === "RENDERING")) return;
+
+  const anySucceeded = renders.some((r) => r.status === "COMPLETED");
+  await prisma.video.update({
+    where: { id: videoId },
+    data: anySucceeded
+      ? { status: "COMPLETED", completedAt: new Date() }
+      : { status: "FAILED", error: "Every clip failed to render." },
+  });
 }
 
 /** Return jobs held by a worker that died mid-flight. */
