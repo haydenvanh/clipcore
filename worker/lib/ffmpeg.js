@@ -90,6 +90,7 @@ export async function probe(filePath) {
     hasAudio: Boolean(audio),
     videoCodec: video?.codec_name ?? null,
     audioCodec: audio?.codec_name ?? null,
+    pixelFormat: video?.pix_fmt ?? null,
   };
 }
 
@@ -104,6 +105,11 @@ export async function downloadSource(url, outputPath, { maxHeight = 1080 } = {})
     YTDLP,
     [
       "-f", `bestvideo[height<=${maxHeight}]+bestaudio/best[height<=${maxHeight}]/best`,
+      // Prefer H.264 + AAC at the best resolution up to the cap. YouTube
+      // offers it up to 1080p, and it lets normalize() copy the streams in
+      // seconds instead of re-encoding for many minutes. Without this yt-dlp
+      // often picks AV1 or VP9.
+      "-S", `res:${maxHeight},vcodec:h264,acodec:m4a`,
       "--merge-output-format", "mp4",
       "--no-playlist",
       "--no-warnings",
@@ -125,13 +131,29 @@ export async function downloadSource(url, outputPath, { maxHeight = 1080 } = {})
 }
 
 /**
- * Re-encode to a predictable intermediate.
+ * Bring a source into one predictable format: H.264 yuv420p with even
+ * dimensions, AAC audio, moov atom up front.
  *
- * Sources arrive in every codec and frame rate imaginable; normalizing once
- * means every later step (seek accuracy, cropping, caption burn-in) behaves the
- * same regardless of what the user uploaded.
+ * A source already in that format — what downloadSource asks YouTube for — is
+ * stream-copied, which takes seconds even for a three-hour video. Anything
+ * else is re-encoded.
+ *
+ * @param {object} [info] probe() of the input, if already known
  */
-export async function normalize(inputPath, outputPath) {
+export async function normalize(inputPath, outputPath, info) {
+  const source = info ?? (await probe(inputPath));
+  const compatible =
+    source.videoCodec === "h264" &&
+    source.pixelFormat === "yuv420p" &&
+    source.width % 2 === 0 &&
+    source.height % 2 === 0 &&
+    source.audioCodec === "aac";
+
+  if (compatible) {
+    await run(FFMPEG, ["-y", "-i", inputPath, "-map", "0:v:0", "-map", "0:a:0", "-c", "copy", "-movflags", "+faststart", outputPath]);
+    return outputPath;
+  }
+
   await run(FFMPEG, [
     "-y", "-i", inputPath,
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
@@ -167,6 +189,20 @@ export async function extractAudioChunk(inputPath, outputPath, { startSec = 0, d
     outputPath
   );
   await run(FFMPEG, args);
+  return outputPath;
+}
+
+/**
+ * The whole audio track as 16 kHz mono 16-bit WAV — the format whisper.cpp
+ * reads natively. Uncompressed, so no lossy artifacts reach the recognizer;
+ * an hour is ~115 MB of temp space.
+ */
+export async function extractAudioWav(inputPath, outputPath) {
+  await run(FFMPEG, [
+    "-y", "-i", inputPath,
+    "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+    outputPath,
+  ]);
   return outputPath;
 }
 

@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "doctor": "node scripts/doctor.mjs",
+    "setup:model": "node scripts/setup-model.mjs",
     "db:migrate": "prisma migrate deploy",
     "postinstall": "prisma generate"
   },

@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { FFMPEG, FFPROBE } from "../worker/lib/binaries.js";
+import { WHISPER_CLI, LOCAL_MODEL_PATH } from "../worker/lib/transcribe-local.js";
 
 const RED = "\x1b[31m", GREEN = "\x1b[32m", YELLOW = "\x1b[33m", DIM = "\x1b[2m", RESET = "\x1b[0m";
 
@@ -32,15 +33,18 @@ function sh(command) {
 
 const checks = [];
 const check = (group, label, ok, fix) => checks.push({ group, label, ok, fix });
+/** Not needed to run; shown as "off" with what it would add. */
+const optional = (group, label, ok, note) => checks.push({ group, label, ok, fix: note, optional: true });
 
 // ── Keys ────────────────────────────────────────────────────────────────────
 const db = process.env.DATABASE_URL;
 check("config", "DATABASE_URL", !placeholder(db) && /^postgres(ql)?:\/\//.test(db || ""),
   "A Postgres connection string. Free at neon.tech, or `brew install postgresql@16`.");
-check("config", "OPENAI_API_KEY", !placeholder(process.env.OPENAI_API_KEY) && /^sk-/.test(process.env.OPENAI_API_KEY || ""),
-  "platform.openai.com/api-keys — used for Whisper transcription (~$0.006/min of video).");
-check("config", "ANTHROPIC_API_KEY", !placeholder(process.env.ANTHROPIC_API_KEY) && /^sk-ant-/.test(process.env.ANTHROPIC_API_KEY || ""),
-  "console.anthropic.com — used to pick the best moments (~$0.10 per hour of video).");
+const hasOpenAi = !placeholder(process.env.OPENAI_API_KEY) && /^sk-/.test(process.env.OPENAI_API_KEY || "");
+optional("config", "OPENAI_API_KEY", hasOpenAi,
+  "Optional. Without it, transcription runs locally with whisper.cpp (free).");
+optional("config", "ANTHROPIC_API_KEY", !placeholder(process.env.ANTHROPIC_API_KEY) && /^sk-ant-/.test(process.env.ANTHROPIC_API_KEY || ""),
+  "Optional. Without it, clips are picked from transcript signals (free). With it, Claude picks them.");
 
 // ── Tools ───────────────────────────────────────────────────────────────────
 // Same resolution the worker uses, so this checks the ffmpeg that will
@@ -54,6 +58,13 @@ check("tools", "ffmpeg can burn captions (libass)",
   "This ffmpeg has no libass, so captions can't be burned in. Install the full build\n" +
   "     (prebuilt, and it sits alongside your current ffmpeg rather than replacing it):\n" +
   "     brew install ffmpeg-full");
+
+// Local transcription is only needed when there's no OpenAI key.
+const whisper = sh(`"${WHISPER_CLI}" --help`);
+const localCheck = hasOpenAi ? optional : check;
+localCheck("tools", "whisper.cpp", whisper.ok || /usage: whisper-cli/.test(whisper.out), "brew install whisper-cpp");
+localCheck("tools", `speech model ${DIM}(${path.relative(process.cwd(), LOCAL_MODEL_PATH)})${RESET}`,
+  fs.existsSync(LOCAL_MODEL_PATH), "npm run setup:model   (downloads ~550 MB, once)");
 
 // ── Database ────────────────────────────────────────────────────────────────
 if (!placeholder(db)) {
@@ -72,10 +83,13 @@ let failing = 0;
 for (const group of ["config", "tools", "database"]) {
   const items = checks.filter((c) => c.group === group);
   if (items.length === 0) continue;
-  console.log(`${items.every((i) => i.ok) ? GREEN + "✓" : RED + "✗"}${RESET} ${group}`);
+  console.log(`${items.every((i) => i.ok || i.optional) ? GREEN + "✓" : RED + "✗"}${RESET} ${group}`);
   for (const item of items) {
     if (item.ok) {
       console.log(`    ${GREEN}ok${RESET}       ${item.label}`);
+    } else if (item.optional) {
+      console.log(`    ${DIM}off${RESET}      ${item.label}`);
+      console.log(`             ${DIM}${item.fix}${RESET}`);
     } else {
       failing++;
       console.log(`    ${RED}missing${RESET}  ${item.label}`);

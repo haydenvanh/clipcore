@@ -16,7 +16,11 @@ const WORKER_ID = `worker-${randomUUID().slice(0, 8)}`;
 const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY || 2);
 const POLL_INTERVAL_MS = Number(process.env.WORKER_POLL_MS || 2000);
 const REAP_INTERVAL_MS = 60_000;
-const LOCK_TIMEOUT_MS = 15 * 60 * 1000;
+// A running job refreshes its lock every HEARTBEAT_MS, so a lock older than
+// LOCK_TIMEOUT_MS means the worker holding it died — however long the job
+// itself takes (transcribing a long video locally can run for many minutes).
+const HEARTBEAT_MS = 30_000;
+const LOCK_TIMEOUT_MS = 3 * 60 * 1000;
 const BACKOFF_SECONDS = [30, 120, 600];
 
 let running = true;
@@ -239,6 +243,12 @@ async function tick() {
 
   for (const job of jobs) {
     inFlight++;
+    const heartbeat = setInterval(() => {
+      prisma.job
+        .updateMany({ where: { id: job.id, status: "RUNNING", lockedBy: WORKER_ID }, data: { lockedAt: new Date() } })
+        .catch((e) => log("warn", "job.heartbeat_failed", { jobId: job.id, error: e.message }));
+    }, HEARTBEAT_MS);
+
     execute(job)
       .then(async (result) => {
         await complete(job.id);
@@ -246,6 +256,7 @@ async function tick() {
       })
       .catch((error) => fail(job, error))
       .finally(() => {
+        clearInterval(heartbeat);
         inFlight--;
       });
   }

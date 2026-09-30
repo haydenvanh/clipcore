@@ -3,11 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { prisma } from "../lib/db.js";
 import * as storage from "../lib/storage.js";
-import { probe, downloadSource, normalize, extractAudioChunk, thumbnail, renderClip } from "../lib/ffmpeg.js";
 import {
-  transcribeWithRetry, planChunks, mergeChunkResults, isTranscriptionConfigured,
+  probe, downloadSource, normalize, extractAudioChunk, extractAudioWav, thumbnail, renderClip,
+} from "../lib/ffmpeg.js";
+import {
+  transcribeWithRetry, planChunks, mergeChunkResults, isTranscriptionConfigured, WHISPER_MODEL_ID,
 } from "../lib/transcribe.js";
+import { transcribeLocally, localTranscriptionProblem, LOCAL_MODEL_NAME } from "../lib/transcribe-local.js";
 import { analyzeTranscript } from "../lib/analyze.js";
+import { selectMomentsLocally } from "../lib/select-local.js";
 import { buildAss } from "../lib/captions.js";
 import { PermanentError, classifyDownloadError } from "../lib/errors.js";
 
@@ -67,7 +71,7 @@ export async function extract({ videoId }) {
     }
 
     const normalizedPath = path.join(dir, "normalized.mp4");
-    await normalize(rawPath, normalizedPath);
+    await normalize(rawPath, normalizedPath, rawInfo);
     const info = await probe(normalizedPath);
 
     const key = storage.keys.source(video.userId, video.id);
@@ -112,7 +116,7 @@ async function mapLimit(items, limit, fn) {
 }
 
 /**
- * Step 2 — transcribe with word-level timings.
+ * Transcribe through the OpenAI Whisper API.
  *
  * The audio is sent in ten-minute slices rather than as one file: the Whisper
  * API rejects uploads over 25 MB, which an uncompressed track reaches at about
@@ -120,13 +124,47 @@ async function mapLimit(items, limit, fn) {
  * run three at a time with that language pinned, so a slice that happens to be
  * mostly music is not transcribed as the wrong language.
  */
+async function transcribeWithApi(videoPath, durationSec, dir) {
+  const chunks = planChunks(durationSec);
+
+  const transcribeChunk = async (chunk, language) => {
+    const audioPath = path.join(dir, `chunk-${String(chunk.index).padStart(3, "0")}.mp3`);
+    await extractAudioChunk(videoPath, audioPath, chunk);
+    const result = await transcribeWithRetry(audioPath, language ? { language } : {});
+    await fs.promises.rm(audioPath, { force: true });
+    return { startSec: chunk.startSec, result };
+  };
+
+  const [first, ...rest] = chunks;
+  const firstResult = await transcribeChunk(first);
+  const language = firstResult.result.language;
+  const restResults = await mapLimit(rest, 3, (chunk) => transcribeChunk(chunk, language));
+
+  return mergeChunkResults([firstResult, ...restResults]);
+}
+
+/** Transcribe on this machine with whisper.cpp, in one pass. */
+async function transcribeOnDevice(videoPath, dir) {
+  const audioPath = path.join(dir, "audio.wav");
+  await extractAudioWav(videoPath, audioPath);
+  return transcribeLocally(audioPath);
+}
+
+/**
+ * Step 2 — transcribe with word-level timings.
+ *
+ * Runs locally with whisper.cpp unless OPENAI_API_KEY is set, in which case
+ * the hosted Whisper API is used instead.
+ */
 export async function transcribeStep({ videoId }) {
   const video = await prisma.video.findUnique({ where: { id: videoId } });
   if (!video?.storageKey) throw new Error(`Video ${videoId} has no source`);
 
-  if (!isTranscriptionConfigured()) {
-    // Fail with a message that names the fix, not an HTTP 401 from OpenAI.
-    throw new PermanentError("OPENAI_API_KEY is not set in .env, so the audio cannot be transcribed.");
+  const useApi = isTranscriptionConfigured();
+  if (!useApi) {
+    // Fail with a message that names the fix before downloading anything.
+    const problem = localTranscriptionProblem();
+    if (problem) throw new PermanentError(problem);
   }
 
   await prisma.video.update({ where: { id: videoId }, data: { status: "TRANSCRIBING" } });
@@ -136,22 +174,11 @@ export async function transcribeStep({ videoId }) {
     await storage.download(video.storageKey, videoPath);
 
     const durationSec = video.durationSec || (await probe(videoPath)).durationSec;
-    const chunks = planChunks(durationSec);
+    const result = useApi
+      ? await transcribeWithApi(videoPath, durationSec, dir)
+      : await transcribeOnDevice(videoPath, dir);
+    const model = useApi ? WHISPER_MODEL_ID : LOCAL_MODEL_NAME;
 
-    const transcribeChunk = async (chunk, language) => {
-      const audioPath = path.join(dir, `chunk-${String(chunk.index).padStart(3, "0")}.mp3`);
-      await extractAudioChunk(videoPath, audioPath, chunk);
-      const result = await transcribeWithRetry(audioPath, language ? { language } : {});
-      await fs.promises.rm(audioPath, { force: true });
-      return { startSec: chunk.startSec, result };
-    };
-
-    const [first, ...rest] = chunks;
-    const firstResult = await transcribeChunk(first);
-    const language = firstResult.result.language;
-    const restResults = await mapLimit(rest, 3, (chunk) => transcribeChunk(chunk, language));
-
-    const result = mergeChunkResults([firstResult, ...restResults]);
     if (result.words.length === 0) {
       throw new PermanentError("No speech was detected in this video.");
     }
@@ -169,29 +196,30 @@ export async function transcribeStep({ videoId }) {
         text: result.text.slice(0, 1_000_000),
         words: result.words,
         storageKey: key,
-        model: process.env.WHISPER_MODEL || "whisper-1",
+        model,
       },
       update: {
         language: result.language,
         text: result.text.slice(0, 1_000_000),
         words: result.words,
         storageKey: key,
+        model,
       },
     });
 
     await prisma.video.update({ where: { id: videoId }, data: { status: "ANALYZING" } });
 
-    return { videoId, wordCount: result.words.length, language: result.language, chunks: chunks.length };
+    return { videoId, wordCount: result.words.length, language: result.language, model };
   });
 }
 
-/** Step 3 — find and score the moments worth clipping. */
+/**
+ * Step 3 — find and score the moments worth clipping.
+ *
+ * With ANTHROPIC_API_KEY set, Claude reads the transcript and picks moments;
+ * without it they are chosen locally from transcript signals alone.
+ */
 export async function analyze({ videoId, targetCount = 10 }) {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    // Fail with a message that names the fix rather than an SDK auth error.
-    throw new PermanentError("ANTHROPIC_API_KEY is not set in .env, so clips cannot be selected.");
-  }
-
   const video = await prisma.video.findUnique({
     where: { id: videoId },
     include: { transcript: true },
@@ -201,10 +229,10 @@ export async function analyze({ videoId, targetCount = 10 }) {
   await prisma.video.update({ where: { id: videoId }, data: { status: "ANALYZING" } });
 
   const words = Array.isArray(video.transcript.words) ? video.transcript.words : [];
-  const moments = await analyzeTranscript(words, {
-    videoDuration: video.durationSec ?? 0,
-    targetCount,
-  });
+  const options = { videoDuration: video.durationSec ?? 0, targetCount };
+  const moments = process.env.ANTHROPIC_API_KEY
+    ? await analyzeTranscript(words, options)
+    : selectMomentsLocally(words, options);
 
   if (moments.length === 0) {
     throw new PermanentError("No clip-worthy moments were found in this video.");
