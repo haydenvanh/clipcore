@@ -1,93 +1,96 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-// Credentials must exist before the module reads them at import time.
-process.env.R2_ACCOUNT_ID = "acct123";
-process.env.R2_ACCESS_KEY_ID = "ak_test";
-process.env.R2_SECRET_ACCESS_KEY = "sk_test";
-process.env.R2_BUCKET = "clipcore-test";
+// Point local storage at a throwaway folder before the module reads it.
+const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "clipcore-storage-"));
+process.env.LOCAL_STORAGE_DIR = ROOT;
+delete process.env.R2_BUCKET;
+delete process.env.STORAGE_DRIVER;
 
 let storage;
 beforeAll(async () => {
   storage = await import("@/lib/storage");
 });
+afterAll(() => fs.rmSync(ROOT, { recursive: true, force: true }));
 
-describe("object key layout", () => {
-  it("namespaces every key by user id, so a guessed key stays in its own tenant", () => {
-    const { keys } = storage;
-    expect(keys.source("u1", "v1")).toBe("sources/u1/v1/source.mp4");
-    expect(keys.source("u1", "v1", "mov")).toBe("sources/u1/v1/source.mov");
-    expect(keys.clip("u1", "c1", "r1")).toBe("clips/u1/c1/r1.mp4");
-    expect(keys.clipThumb("u1", "c1", "r1")).toBe("clips/u1/c1/r1.jpg");
-    expect(keys.transcript("v1")).toBe("transcripts/v1.json");
-    expect(keys.captions("c1", "es")).toBe("captions/c1.es.ass");
-  });
-
-  it("maps content types to sane extensions and falls back safely", () => {
-    expect(storage.extensionForType("video/quicktime")).toBe("mov");
-    expect(storage.extensionForType("audio/mpeg")).toBe("mp3");
-    expect(storage.extensionForType("application/x-evil")).toBe("mp4");
+describe("driver selection", () => {
+  it("defaults to local when no bucket is configured", () => {
+    expect(storage.driver).toBe("local");
   });
 });
 
-describe("createUploadUrl", () => {
-  it("signs a PUT that carries the key, the type, and an expiry", async () => {
-    const res = await storage.createUploadUrl({
-      userId: "u1", videoId: "v1", contentType: "video/mp4", contentLength: 5_000_000,
-    });
-    expect(res.key).toBe("sources/u1/v1/source.mp4");
-    expect(res.uploadUrl).toContain("clipcore-test");
-    expect(res.uploadUrl).toContain("X-Amz-Signature");
-    expect(res.expiresIn).toBe(900);
+describe("localPath — path traversal", () => {
+  // Keys reach /api/media straight from the URL, so these are real inputs.
+  it.each([
+    ["parent escape", "../../.env"],
+    ["nested escape", "clips/../../../etc/passwd"],
+    ["absolute path", "/etc/passwd"],
+    ["the root itself", "."],
+    ["empty", ""],
+    ["null byte", "clips/a\0.mp4"],
+  ])("refuses %s", (_name, key) => {
+    expect(() => storage.localPath(key)).toThrow(/Invalid storage key/);
   });
 
-  it("refuses a file type that is not on the allowlist", async () => {
-    await expect(
-      storage.createUploadUrl({ userId: "u1", contentType: "application/zip", contentLength: 100 })
-    ).rejects.toThrow(/Unsupported file type/);
-  });
-
-  it("refuses anything over the 2 GB cap before a URL exists", async () => {
-    await expect(
-      storage.createUploadUrl({
-        userId: "u1", contentType: "video/mp4", contentLength: 3 * 1024 * 1024 * 1024,
-      })
-    ).rejects.toThrow(/larger than/);
-  });
-
-  it("refuses a missing or nonsensical size", async () => {
-    for (const contentLength of [0, -1, NaN, undefined]) {
-      await expect(
-        storage.createUploadUrl({ userId: "u1", contentType: "video/mp4", contentLength })
-      ).rejects.toThrow(/valid file size/);
-    }
-  });
-
-  it("generates a video id when one is not supplied", async () => {
-    const res = await storage.createUploadUrl({
-      userId: "u1", contentType: "video/mp4", contentLength: 1000,
-    });
-    expect(res.videoId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(res.key).toContain(res.videoId);
+  it("resolves a normal key inside the root", () => {
+    expect(storage.localPath("clips/u/c/r.mp4")).toBe(path.join(ROOT, "clips/u/c/r.mp4"));
   });
 });
 
-describe("createDownloadUrl", () => {
-  it("signs a time-limited GET", async () => {
-    const url = await storage.createDownloadUrl("clips/u1/c1/r1.mp4", { expiresIn: 60 });
-    expect(url).toContain("X-Amz-Signature");
-    expect(url).toContain("X-Amz-Expires=60");
+describe("mediaUrl", () => {
+  it("points local objects at /api/media, encoding each segment", async () => {
+    expect(await storage.mediaUrl("clips/u 1/c/r.mp4")).toBe("/api/media/clips/u%201/c/r.mp4");
   });
 
-  it("sets a download filename without letting a quote break the header", async () => {
-    const url = await storage.createDownloadUrl("clips/u1/c1/r1.mp4", {
-      filename: 'my"clip.mp4',
-    });
-    const disposition = decodeURIComponent(url).match(/response-content-disposition=([^&]+)/i);
-    expect(disposition).toBeTruthy();
-    expect(decodeURIComponent(disposition[1])).toBe('attachment; filename="myclip.mp4"');
+  it("adds a download flag and filename when asked", async () => {
+    const url = await storage.mediaUrl("clips/u/c/r.mp4", { download: true, filename: "My clip" });
+    expect(url).toBe("/api/media/clips/u/c/r.mp4?download=1&name=My+clip");
   });
 
-  it("requires a key", async () => {
-    await expect(storage.createDownloadUrl("")).rejects.toThrow(/key is required/);
+  it("returns null for a missing key rather than a broken URL", async () => {
+    expect(await storage.mediaUrl(null)).toBeNull();
+    expect(await storage.mediaUrl("")).toBeNull();
+  });
+});
+
+describe("safeFilename", () => {
+  it("strips characters that would break a Content-Disposition header", () => {
+    expect(storage.safeFilename('my "clip"; x=y\r\n')).toBe("my clip xy");
+  });
+
+  it("never returns an empty name", () => {
+    expect(storage.safeFilename("")).toBe("clip");
+    expect(storage.safeFilename('"";')).toBe("clip");
+  });
+
+  it("caps the length", () => {
+    expect(storage.safeFilename("a".repeat(500)).length).toBeLessThanOrEqual(120);
+  });
+});
+
+describe("local read / write / delete", () => {
+  it("round-trips an object and reports its size", async () => {
+    await storage.putObject("clips/u/c/a.txt", "hello");
+    expect(await storage.statObject("clips/u/c/a.txt")).toEqual({ size: 5 });
+  });
+
+  it("reads an exact byte range — what <video> seeking relies on", async () => {
+    await storage.putObject("clips/u/c/b.txt", "0123456789");
+    const chunks = [];
+    for await (const chunk of storage.readStream("clips/u/c/b.txt", { start: 2, end: 5 })) chunks.push(chunk);
+    expect(Buffer.concat(chunks).toString()).toBe("2345");
+  });
+
+  it("returns null for an object that doesn't exist", async () => {
+    expect(await storage.statObject("clips/nope/missing.mp4")).toBeNull();
+  });
+
+  it("deletes a whole prefix, so deleting a video leaves no orphaned files", async () => {
+    await storage.putObject("sources/u/v1/source.mp4", "x");
+    await storage.putObject("sources/u/v1/thumb.jpg", "y");
+    await storage.deletePrefix("sources/u/v1");
+    expect(fs.existsSync(path.join(ROOT, "sources/u/v1"))).toBe(false);
   });
 });

@@ -1,164 +1,111 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { Queue, JOB_TYPES } from "@/lib/queue";
-import { CreditService } from "@/lib/services/credits";
-import { BillingService } from "@/lib/services/billing";
-import { limitsForPlan, creditsForDuration } from "@/lib/plans";
 import { assertSafeUrl, detectSource } from "@/lib/url-guard";
-import { enforceRateLimit } from "@/lib/rate-limit";
-import { ApiError, handler, readJson, requireUser } from "@/lib/api";
+import { mediaUrl } from "@/lib/storage";
+import { ApiError, handler, readJson, getOwner } from "@/lib/api";
 
-/** A user's videos, newest first, with their clips and renders. */
+const IN_FLIGHT = ["PENDING", "EXTRACTING", "TRANSCRIBING", "ANALYZING", "RENDERING"];
+
+/** Videos, newest first, with their clips and render state. */
 export const GET = handler("VIDEOS_LIST", async (req) => {
-  const user = await requireUser();
+  const owner = await getOwner();
 
   const params = new URL(req.url).searchParams;
   const limit = Math.min(50, Math.max(1, parseInt(params.get("limit") || "20", 10) || 20));
-  const cursor = params.get("cursor");
 
   const videos = await prisma.video.findMany({
-    where: { userId: user.id },
+    where: { userId: owner.id },
     orderBy: { createdAt: "desc" },
-    take: limit + 1,
-    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    take: limit,
     include: {
       clips: {
         orderBy: { order: "asc" },
-        include: {
-          renders: {
-            select: {
-              id: true, status: true, aspectRatio: true, preset: true,
-              captionStyle: true, storageKey: true, thumbnailKey: true,
-            },
-          },
+        select: {
+          id: true,
+          status: true,
+          renders: { select: { id: true, status: true } },
         },
       },
     },
   });
 
-  const hasMore = videos.length > limit;
-  const items = hasMore ? videos.slice(0, limit) : videos;
+  const items = await Promise.all(
+    videos.map(async (video) => {
+      const renders = video.clips.flatMap((clip) => clip.renders);
+      return {
+        id: video.id,
+        title: video.title,
+        sourceUrl: video.sourceUrl,
+        source: video.source,
+        status: video.status,
+        error: video.error,
+        durationSec: video.durationSec,
+        createdAt: video.createdAt,
+        completedAt: video.completedAt,
+        thumbnailUrl: await mediaUrl(video.thumbnailKey),
+        clipCount: video.clips.length,
+        rendersDone: renders.filter((r) => r.status === "COMPLETED").length,
+        rendersFailed: renders.filter((r) => r.status === "FAILED").length,
+        rendersTotal: renders.length,
+      };
+    })
+  );
 
-  return NextResponse.json({
-    // BigInt does not survive JSON.stringify, so normalize before responding.
-    items: items.map((video) => ({
-      ...video,
-      sizeBytes: video.sizeBytes ? Number(video.sizeBytes) : null,
-    })),
-    nextCursor: hasMore ? items[items.length - 1].id : null,
-  });
+  return NextResponse.json({ items });
 });
 
 /**
- * Start processing a video.
+ * Start processing a video from a link.
  *
- * Credits are held and the job is enqueued in one transaction: if the enqueue
- * fails, the hold rolls back with it, so a user is never charged for work that
- * was never queued. That single guarantee is why the queue lives in Postgres
- * rather than Redis (docs/02-ROADMAP.md D6).
+ * The Video row and its first job are written in one transaction, so a video
+ * can never exist without the job that will process it — which would otherwise
+ * sit in the list as "Queued" forever.
  */
 export const POST = handler("VIDEOS_CREATE", async (req) => {
-  const user = await requireUser();
-  await enforceRateLimit("generate", user.id);
+  const owner = await getOwner();
+  const { sourceUrl, title } = await readJson(req);
 
-  const { sourceUrl, videoId, durationSeconds, title } = await readJson(req);
-
-  const subscription = await BillingService.getActiveSubscription(user.id);
-  const limits = limitsForPlan(subscription?.plan);
-
-  // Concurrency is a real, non-arbitrary reason to upgrade — and it protects
-  // the worker pool from one user monopolising it.
-  const active = await prisma.video.count({
-    where: {
-      userId: user.id,
-      status: { in: ["PENDING", "EXTRACTING", "TRANSCRIBING", "ANALYZING", "RENDERING"] },
-    },
-  });
-  if (active >= limits.maxConcurrentJobs) {
-    throw new ApiError(
-      429,
-      `Your ${limits.name} plan processes ${limits.maxConcurrentJobs} video${limits.maxConcurrentJobs > 1 ? "s" : ""} at a time. Wait for one to finish, or upgrade.`
-    );
+  if (!sourceUrl || typeof sourceUrl !== "string") {
+    throw new ApiError(400, "Paste a YouTube link.");
   }
 
-  let video;
+  // Only YouTube, TikTok and Instagram hosts; rejects private addresses,
+  // credentials in the URL, and non-HTTP schemes (see lib/url-guard).
+  try {
+    assertSafeUrl(sourceUrl.trim());
+  } catch (error) {
+    throw new ApiError(400, error.message);
+  }
+  const source = detectSource(sourceUrl.trim());
+  if (!source) throw new ApiError(400, "That doesn't look like a YouTube link.");
 
-  if (videoId) {
-    // The upload path: the row already exists from /api/uploads/presign.
-    video = await prisma.video.findFirst({ where: { id: videoId, userId: user.id } });
-    if (!video) throw new ApiError(404, "Upload not found.");
-    if (video.status !== "PENDING") throw new ApiError(409, "That video is already processing.");
-  } else {
-    if (!sourceUrl) throw new ApiError(400, "A video URL or an uploaded file is required.");
+  // Pasting the same link twice while it is still processing is almost always
+  // a double-click; return the existing job rather than doing the work twice.
+  const existing = await prisma.video.findFirst({
+    where: { userId: owner.id, sourceUrl: sourceUrl.trim(), status: { in: IN_FLIGHT } },
+    select: { id: true, status: true },
+  });
+  if (existing) {
+    return NextResponse.json({ videoId: existing.id, status: existing.status, duplicate: true });
+  }
 
-    // Strict allowlist: YouTube, TikTok, Instagram. Rejects private addresses,
-    // credentials in the URL, and non-HTTP schemes.
-    assertSafeUrl(sourceUrl);
-    const source = detectSource(sourceUrl);
-    if (!source) throw new ApiError(400, "Paste a YouTube, TikTok, or Instagram link.");
-
-    if (source !== "YOUTUBE") {
-      throw new ApiError(
-        501,
-        `${source.charAt(0)}${source.slice(1).toLowerCase()} links are coming soon. YouTube links and file uploads work today.`
-      );
-    }
-
-    video = await prisma.video.create({
+  const video = await prisma.$transaction(async (tx) => {
+    const created = await tx.video.create({
       data: {
-        userId: user.id,
+        userId: owner.id,
         source,
-        sourceUrl,
-        title: typeof title === "string" ? title.slice(0, 200) : null,
-        durationSec: Number.isFinite(Number(durationSeconds)) ? Math.round(Number(durationSeconds)) : null,
+        sourceUrl: sourceUrl.trim(),
+        title: typeof title === "string" && title.trim() ? title.trim().slice(0, 200) : null,
         status: "PENDING",
-        provider: "native",
       },
     });
-  }
-
-  // Charged per minute of source. Duration is an estimate until the worker
-  // probes the real file, at which point the hold is settled against it.
-  const estimatedMinutes = video.durationSec
-    ? creditsForDuration(video.durationSec)
-    : creditsForDuration(600); // nominal 10 minutes when the length is unknown
-
-  if (video.durationSec && video.durationSec > limits.maxVideoMinutes * 60) {
-    throw new ApiError(
-      413,
-      `Your ${limits.name} plan handles videos up to ${limits.maxVideoMinutes} minutes.`
+    await Queue.enqueue(
+      { type: JOB_TYPES.EXTRACT, payload: { videoId: created.id }, refType: "video", refId: created.id },
+      tx
     );
-  }
-
-  try {
-    await prisma.$transaction(async (tx) => {
-      await CreditService.hold(user.id, estimatedMinutes, {
-        refType: "video",
-        refId: video.id,
-        description: `Processing ${video.title || "video"}`,
-      });
-      await tx.video.update({
-        where: { id: video.id },
-        data: { creditsHeld: estimatedMinutes, status: "PENDING" },
-      });
-      await Queue.enqueue(
-        { type: JOB_TYPES.EXTRACT, payload: { videoId: video.id }, refType: "video", refId: video.id },
-        tx
-      );
-    });
-  } catch (error) {
-    if (error.name === "InsufficientCreditsError") {
-      throw new ApiError(
-        402,
-        `This video needs about ${estimatedMinutes} credits and you have ${error.available}. Top up to continue.`
-      );
-    }
-    throw error;
-  }
-
-  return NextResponse.json({
-    videoId: video.id,
-    status: "PENDING",
-    creditsHeld: estimatedMinutes,
+    return created;
   });
+
+  return NextResponse.json({ videoId: video.id, status: video.status });
 });

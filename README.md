@@ -1,127 +1,129 @@
 # ClipCore
 
-**Turn long videos into clips that travel.**
+A private tool that turns a YouTube video into short vertical clips with
+captions burned in.
 
-ClipCore watches your long-form video, finds the moments worth posting, and cuts them into
-captioned, platform-ready clips. Every clip carries a viral score *and the reasoning behind it*.
+Paste a link → it downloads the video, transcribes it, picks the strongest
+moments, and renders each one as a 9:16 clip with word-by-word captions. Preview
+them in the browser and download the ones you want.
 
-> **The wedge:** a two-hour podcast on the $9.99 plan. Competing tools cap entry-tier videos at
-> two minutes, count clips instead of minutes, or don't publish their limits at all.
-
-https://github.com/user-attachments/assets/018738b8-af50-4a08-a7ac-1090b5b1f903
+Single user, runs on your own machine. There is no sign-in.
 
 ---
 
-## Pricing
+## Setup (once)
 
-One rule: **1 credit = 1 minute of source video processed.** Not per clip, not per export.
+**1. Tools**
 
-| Plan | Price | Credits | Max video | Concurrent jobs |
-| :--- | :--- | :--- | :--- | :--- |
-| Basic | $9.99/mo | 150 min | 60 min | 1 |
-| Pro | $14.99/mo | 300 min | 3 h | 2 |
-| Ultra | $29.99/mo | 800 min | 5 h | 4 |
+```bash
+brew install yt-dlp
 
-Reasoning behind these numbers: [`docs/PRICING_STRATEGY.md`](docs/PRICING_STRATEGY.md).
-
-## Stack
-
-| Layer | Choice |
-| :--- | :--- |
-| Web | Next.js 16 (App Router) · React 19 · Tailwind v4 |
-| Auth | NextAuth v4 + Prisma adapter (Google) |
-| Data | PostgreSQL + Prisma 7 (driver adapter) |
-| Billing | Stripe subscriptions + Customer Portal |
-| Storage | Cloudflare R2 (S3-compatible) — *in progress* |
-| Worker | Node + ffmpeg + yt-dlp on Railway — *in progress* |
-| Queue | Postgres `FOR UPDATE SKIP LOCKED` |
-
-## Architecture at a glance
-
-```
-Browser ──► Vercel (Next.js pages + API routes)
-                │
-                ├──► Postgres (Neon)  ◄── worker claims jobs with SKIP LOCKED
-                ├──► Cloudflare R2    ◄── presigned PUT/GET, zero egress
-                ├──► Stripe           ──► /api/webhook/stripe (idempotent)
-                └──► Clip provider    ──► /api/webhook/muapi   (authenticated)
+# ffmpeg must be built with libass, or captions can't be burned in.
+# Homebrew's default ffmpeg currently isn't, so use this tap:
+brew tap homebrew-ffmpeg/ffmpeg
+brew install homebrew-ffmpeg/ffmpeg/ffmpeg
 ```
 
-Two decisions worth knowing before you read the code:
+If you already have Homebrew's plain `ffmpeg`, run
+`brew uninstall --ignore-dependencies ffmpeg` first.
 
-- **The clipping provider is a seam, not a dependency.** `muapi` is the default so nothing
-  regresses; a native worker (yt-dlp → ffmpeg → Whisper → scoring) is being built behind the same
-  interface. Rationale: [`docs/02-ROADMAP.md`](docs/02-ROADMAP.md) D1.
-- **Credits are an append-only ledger.** `User.credits` is a cache written in the same transaction
-  as every ledger entry. Jobs *hold* credits, then *settle* or *refund* — so a failed job never
-  silently burns a balance. D4 in the same document.
+**2. Config**
 
-## Local development
+```bash
+cp .env.example .env
+```
 
-**Prerequisites:** Node 20.9+, a PostgreSQL database (local, or free on [Neon](https://neon.tech)).
+Fill in the four required values: two Postgres URLs, an OpenAI key, and an
+Anthropic key. See comments in `.env.example` for where to get each.
+
+**3. Install and set up the database**
 
 ```bash
 npm install
-cp .env.example .env      # fill in the values described below
-npx prisma migrate deploy # applies the tracked baseline migration
+npm run db:migrate
+```
+
+**4. Check**
+
+```bash
+npm run doctor
+```
+
+This checks every key, tool, and the database, and tells you how to fix
+anything that's missing.
+
+## Run
+
+```bash
 npm run dev
 ```
 
-Open http://localhost:3000.
+Open **http://localhost:3000**.
 
-```bash
-npm test          # vitest — 59 tests
-npm run lint
-npm run build
+This starts two processes together — the web app and the worker that does the
+video processing. Both are needed: without the worker, videos sit at "Queued".
+
+## How it works
+
+```
+paste link → download → transcribe → pick moments → render clips
+               yt-dlp     Whisper       Claude         ffmpeg
 ```
 
-## Environment
-
-See [`.env.example`](.env.example) for the annotated list and
-[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for where each value comes from.
-
-Two that are easy to miss:
-
-- **`MUAPI_WEBHOOK_SECRET`** — required. The provider callback endpoint **fails closed** without
-  it, because an unauthenticated write path into other users' jobs is worse than a missed callback.
-- **`STRIPE_PRICE_BASIC` / `_PRO` / `_ULTRA`** — checkout refuses a plan whose Stripe price id is
-  not configured, rather than guessing.
-
-## Documentation
-
-| Document | What it covers |
+| Stage | What happens |
 | :--- | :--- |
-| [`01-AUDIT.md`](docs/01-AUDIT.md) | Full audit of the codebase this was built from — 43 findings, traced |
-| [`02-ROADMAP.md`](docs/02-ROADMAP.md) | Architectural decision records |
-| [`ROADMAP.md`](docs/ROADMAP.md) | Feature prioritization, scaling plan for 10 → 1,000 users |
-| [`TECH_DEBT.md`](docs/TECH_DEBT.md) | Debt register, each item with an interest rate and a payoff trigger |
-| [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Topology, cost per tier, env matrix, first deploy |
-| [`BUSINESS_MODEL.md`](docs/BUSINESS_MODEL.md) | Unit economics, LTV/CAC, path to $1k MRR |
-| [`PRICING_STRATEGY.md`](docs/PRICING_STRATEGY.md) | Why minutes, why these numbers |
-| [`COMPETITOR_ANALYSIS.md`](docs/COMPETITOR_ANALYSIS.md) | Snazo, Opus Clip, Klap, Captions, Submagic |
-| [`FIRST_100_USERS.md`](docs/FIRST_100_USERS.md) | Acquisition plan — organic only, and why |
-| [`SEO_STRATEGY.md`](docs/SEO_STRATEGY.md) | Comparison pages, free tools, technical SEO |
-| [`LAUNCH_CHECKLIST.md`](docs/LAUNCH_CHECKLIST.md) | Go/no-go gate |
+| Download | yt-dlp fetches the video (up to 1080p); ffmpeg normalizes it. |
+| Transcribe | Audio goes to Whisper in 10-minute slices, with word-level timings. |
+| Pick moments | Claude proposes the strongest standalone moments; each is then scored on measurable signals (pace, reactions, emotion, hooks). Best first. |
+| Render | Each moment is cut, cropped to 9:16 with no black bars, and captioned. |
 
-## Status
+Each stage is a separate job. If one fails, **Retry** on the video's page
+resumes from where it stopped — a failed render doesn't re-download or
+re-transcribe.
 
-**Built and verified:** Google auth · landing page · pricing · Stripe subscriptions + Customer
-Portal · credit ledger with hold/settle/refund · R2 storage with presigned upload · Postgres job
-queue · rate limiting · route protection · Sentry · legal pages · dashboard (studio, billing,
-connections) · social connection architecture with YouTube publishing.
+## Where things are
 
-**Built, not yet run against real media:** the clipping pipeline — extract → transcribe → score →
-render. Every stage compiles and its logic is unit-tested (181 tests), but no real video has been
-through it end to end. Expect ffmpeg caption timing and crop framing to need adjustment on first
-contact with actual footage.
+- **Clips and source videos:** `.storage/` in the project folder
+- **Everything else** (videos, clips, scores, transcripts): the Postgres database
 
-**Not built:** TikTok / Instagram / Facebook publishing (interfaces and stubs are in place),
-admin panel, email/password login, clip editor.
+Deleting a video in the app removes its files from `.storage/` too.
 
-Full status and what to do next: [`docs/ROADMAP.md`](docs/ROADMAP.md) §3.
+## Costs
 
-## License
+You pay only for the two APIs:
 
-MIT — see [LICENSE](LICENSE).
+| | Per hour of video |
+| :--- | :--- |
+| Whisper (OpenAI) | ~$0.36 |
+| Moment selection (Anthropic) | ~$0.10 |
 
-Built on the [ai-clipping-generator](https://github.com/SamurAIGPT/ai-clipping-generator) template.
+## Troubleshooting
+
+| Symptom | Fix |
+| :--- | :--- |
+| Video stuck at "Queued" | The worker isn't running. Use `npm run dev`, not `npm run dev:web`. |
+| "ffmpeg was built without libass" | Reinstall ffmpeg from the tap in step 1, restart, press Retry. |
+| "OPENAI_API_KEY is not set" | Add it to `.env`, restart `npm run dev`, press Retry. |
+| "This video is private / unavailable / age-restricted" | yt-dlp can't fetch it without signing in. Try another video. |
+| Anything else | `npm run doctor`. The full error is shown on the video's page. |
+
+## Scripts
+
+| Command | |
+| :--- | :--- |
+| `npm run dev` | Web app + worker |
+| `npm run doctor` | Check setup |
+| `npm run db:migrate` | Apply database migrations |
+| `npm test` | Tests |
+| `npm run worker` | Worker only |
+| `npm run dev:web` | Web app only |
+
+## Security
+
+There's no login, so the app is bound to `127.0.0.1` and is only reachable from
+this computer. Don't change that or put it on the internet — anyone who could
+reach it could use your API keys.
+
+---
+
+Earlier plans for a public SaaS version are in [`docs/archive/`](docs/archive/).

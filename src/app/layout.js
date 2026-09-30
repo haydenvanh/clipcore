@@ -1,41 +1,25 @@
-import { Inter, Outfit } from "next/font/google";
+import { Inter } from "next/font/google";
+import { Toaster } from "react-hot-toast";
 import "./globals.css";
-import { Providers } from "./providers";
-import Navbar from "../components/Navbar";
-import config from "@/lib/config";
+import Navbar from "@/components/Navbar";
 
-const inter = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
-});
-
-const outfit = Outfit({
-  variable: "--font-outfit",
-  subsets: ["latin"],
-});
+const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
 
 export const metadata = {
-  title: {
-    default: `${config.appName} — ${config.appTagline}`,
-    template: `%s · ${config.appName}`,
-  },
-  description: config.appDescription,
+  title: { default: "ClipCore", template: "%s · ClipCore" },
+  description: "Turn a YouTube video into captioned vertical clips.",
+  // Private tool: keep it out of search indexes if it is ever exposed.
+  robots: { index: false, follow: false },
 };
 
 export default function RootLayout({ children }) {
-  const theme = config?.theme || "slate-indigo";
-
   return (
-    <html lang="en" className={`${inter.variable} ${outfit.variable} w-full scroll-smooth`} data-theme={theme}>
+    <html lang="en" className={`${inter.variable} w-full`} data-theme="slate-indigo">
       <body className={`${inter.className} min-h-dvh w-full flex flex-col antialiased bg-bg-page text-primary-text font-sans`}>
-        <Providers>
-          <Navbar />
-          <div className="flex-1 flex flex-col min-h-0">
-            {children}
-          </div>
-        </Providers>
+        <Toaster position="top-right" />
+        <Navbar />
+        <main className="flex-1 flex flex-col min-h-0">{children}</main>
       </body>
     </html>
   );
 }
-

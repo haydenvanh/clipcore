@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { ApiError, handler, readJson, requireUser } from "@/lib/api";
+import { ApiError, handler, readJson, getOwner } from "@/lib/api";
 
 /** The word timings behind the captions editor. */
 export const GET = handler("TRANSCRIPT_GET", async (req, ctx) => {
-  const user = await requireUser();
+  const user = await getOwner();
   const { id } = await ctx.params;
 
   const video = await prisma.video.findFirst({
@@ -35,7 +35,7 @@ const MAX_WORDS = 200_000;
  * than rendering a broken clip and charging for it.
  */
 export const PATCH = handler("TRANSCRIPT_UPDATE", async (req, ctx) => {
-  const user = await requireUser();
+  const user = await getOwner();
   const { id } = await ctx.params;
 
   const video = await prisma.video.findFirst({

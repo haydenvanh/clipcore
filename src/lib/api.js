@@ -1,16 +1,17 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
-import * as Sentry from "@sentry/nextjs";
-import { InsufficientCreditsError } from "@/lib/services/credits";
+import { prisma } from "@/lib/prisma";
 
 /**
  * Shared helpers for route handlers.
  *
- * Before this existed, each route re-implemented session checks and error
- * mapping slightly differently, which is how two status routes ended up with
- * no session check at all.
+ * ClipCore is a private, single-user tool: there is no sign-in. Every record
+ * still belongs to a User row, because Video, Clip and Render all carry a
+ * userId and keeping one owner row is a far smaller change than threading its
+ * removal through the schema, the worker and every query. That owner is created
+ * on first use and returned by getOwner().
  */
+
+export const OWNER_ID = "local-owner";
 
 export class ApiError extends Error {
   constructor(status, message) {
@@ -20,13 +21,31 @@ export class ApiError extends Error {
   }
 }
 
-/** Returns the session user, or throws a 401 ApiError. */
-export async function requireUser() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    throw new ApiError(401, "You must be signed in to do that.");
+let ownerReady = null;
+
+/**
+ * The single local user that owns everything.
+ *
+ * Upserted once per server process and memoised, so routes can call it freely
+ * without a write on every request.
+ */
+export async function getOwner() {
+  if (!ownerReady) {
+    ownerReady = prisma.user
+      .upsert({
+        where: { id: OWNER_ID },
+        create: { id: OWNER_ID, name: "Owner" },
+        update: {},
+        select: { id: true, name: true },
+      })
+      .catch((error) => {
+        // Don't cache a failure: a database that was briefly unreachable
+        // should not poison every later request in this process.
+        ownerReady = null;
+        throw error;
+      });
   }
-  return session.user;
+  return ownerReady;
 }
 
 /** Parse a JSON body, rejecting anything that is not a JSON object. */
@@ -44,25 +63,21 @@ export async function readJson(req) {
 }
 
 /**
- * Map a thrown error to a response. Client-safe messages are passed through;
- * anything else becomes a generic 500 so internal details do not leak.
+ * Map a thrown error to a response.
+ *
+ * The real message is returned rather than a generic "something went wrong":
+ * the only person who ever sees this is the owner, and hiding the cause from
+ * them just means reading server logs to find out what broke.
  */
 export function errorResponse(scope, error) {
   if (error instanceof ApiError) {
     return NextResponse.json({ error: error.message }, { status: error.status });
   }
-  if (error instanceof InsufficientCreditsError) {
-    return NextResponse.json(
-      { error: "Insufficient credits.", required: error.required, available: error.available },
-      { status: 402 }
-    );
-  }
-  // Only genuinely unexpected failures reach here — the branches above are
-  // expected outcomes and would be noise in the error tracker.
   console.error(`[${scope}]`, error);
-  Sentry.captureException(error, { tags: { scope } });
-
-  return NextResponse.json({ error: "Something went wrong. Please try again." }, { status: 500 });
+  return NextResponse.json(
+    { error: error?.message || "Something went wrong." },
+    { status: 500 }
+  );
 }
 
 /** Wrap a handler so thrown ApiErrors become responses. */

@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { buildSrt, buildVtt, buildAss } from "@/lib/captions";
-import { ApiError, handler, requireUser } from "@/lib/api";
+import { ApiError, handler, getOwner } from "@/lib/api";
 
 export const runtime = "nodejs";
 
@@ -18,7 +18,7 @@ const FORMATS = {
  * that disagrees with the burned-in captions is worse than no sidecar.
  */
 export const GET = handler("CLIP_CAPTIONS", async (req, ctx) => {
-  const user = await requireUser();
+  const user = await getOwner();
   const { id } = await ctx.params;
 
   const params = new URL(req.url).searchParams;

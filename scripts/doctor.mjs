@@ -1,128 +1,90 @@
 #!/usr/bin/env node
 /**
- * Environment check.
+ * Check everything the pipeline needs, and say how to fix what's missing.
  *
- * Config mistakes surface as opaque third-party errors — Google's
- * "invalid_client", Stripe's "No such price", a Prisma connection timeout —
- * and none of them say which variable is wrong. This does.
+ * Config problems otherwise surface as opaque errors from somewhere else —
+ * an ENOENT from ffmpeg, a 401 from OpenAI, a video stuck at "Queued" — and
+ * none of them say which setting is at fault.
  *
  *   npm run doctor
  */
 import fs from "node:fs";
 import path from "node:path";
-
-const RESET = "\x1b[0m";
-const RED = "\x1b[31m";
-const GREEN = "\x1b[32m";
-const YELLOW = "\x1b[33m";
-const DIM = "\x1b[2m";
-
-const envPath = path.resolve(process.cwd(), ".env");
-if (!fs.existsSync(envPath)) {
-  console.error(`${RED}No .env file. Copy it first:${RESET}\n  cp .env.example .env\n`);
-  process.exit(1);
-}
-
-const env = {};
-for (const line of fs.readFileSync(envPath, "utf8").split("\n")) {
-  const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
-  if (match) env[match[1]] = match[2].replace(/^["']|["']$/g, "");
-}
-
-const isPlaceholder = (value) =>
-  !value ||
-  /PASTE_|your_|user:password|localhost:5432\/db|price_\.\.\.|sk_test_\.\.\.|whsec_\.\.\./.test(value);
-
-/** [key, required-for, validator, how-to-fix] */
-const CHECKS = [
-  ["DATABASE_URL", "sign-in", (v) => /^postgres(ql)?:\/\//.test(v), "Create a free project at neon.tech and paste the pooled connection string."],
-  ["DIRECT_URL", "migrations", (v) => /^postgres(ql)?:\/\//.test(v), "Neon shows this as the direct (unpooled) connection string."],
-  ["NEXTAUTH_SECRET", "sign-in", (v) => v.length >= 32, "openssl rand -base64 32"],
-  ["NEXTAUTH_URL", "sign-in", (v) => /^https?:\/\//.test(v), "http://localhost:3000 for local development."],
-  ["GOOGLE_CLIENT_ID", "sign-in", (v) => v.endsWith(".apps.googleusercontent.com"),
-    "console.cloud.google.com/apis/credentials → OAuth client ID → Web application.\n     Redirect URI must be exactly: http://localhost:3000/api/auth/callback/google"],
-  ["GOOGLE_CLIENT_SECRET", "sign-in", (v) => v.startsWith("GOCSPX-"), "Shown next to the client ID in Google Cloud Console."],
-  ["ENCRYPTION_KEY", "social connections", (v) => Buffer.from(v, "base64").length === 32, "openssl rand -base64 32"],
-  ["STRIPE_SECRET_KEY", "checkout", (v) => /^sk_(test|live)_/.test(v), "dashboard.stripe.com/apikeys"],
-  ["STRIPE_PRICE_BASIC", "checkout", (v) => v.startsWith("price_"), "Create a recurring price in Stripe and paste its id."],
-  ["R2_ACCOUNT_ID", "uploads", (v) => v.length > 8, "dash.cloudflare.com → R2 → account id."],
-  ["OPENAI_API_KEY", "transcription", (v) => v.startsWith("sk-"), "Used by the worker for Whisper."],
-  ["ANTHROPIC_API_KEY", "clip scoring", (v) => v.startsWith("sk-ant-"), "Used by the worker to score moments."],
-];
-
-const groups = new Map();
-for (const [key, feature, validate, fix] of CHECKS) {
-  const value = env[key] ?? process.env[key] ?? "";
-  let state = "ok";
-  if (isPlaceholder(value)) state = "missing";
-  else if (!validate(value)) state = "invalid";
-
-  if (!groups.has(feature)) groups.set(feature, []);
-  groups.get(feature).push({ key, state, fix, value });
-}
-
-// System binaries the worker shells out to. A missing one fails at render
-// time with an ENOENT that says nothing about which tool was absent.
 import { execSync } from "node:child_process";
 
-function binary(name, test) {
+const RED = "\x1b[31m", GREEN = "\x1b[32m", YELLOW = "\x1b[33m", DIM = "\x1b[2m", RESET = "\x1b[0m";
+
+const envPath = path.resolve(".env");
+if (fs.existsSync(envPath) && typeof process.loadEnvFile === "function") {
+  process.loadEnvFile(envPath);
+}
+
+const placeholder = (v) => !v || /PASTE_|your_|user:password|localhost:5432\/db|sk-\.\.\./.test(v);
+
+function sh(command) {
   try {
-    const out = execSync(test, { stdio: ["ignore", "pipe", "ignore"] }).toString();
-    return { ok: true, out };
-  } catch {
-    return { ok: false, out: "" };
+    return { ok: true, out: execSync(command, { stdio: ["ignore", "pipe", "pipe"] }).toString() };
+  } catch (error) {
+    return { ok: false, out: String(error.stdout || "") + String(error.stderr || "") };
   }
 }
 
-console.log("\nClipCore environment check\n");
+const checks = [];
+const check = (group, label, ok, fix) => checks.push({ group, label, ok, fix });
 
-const ffmpeg = binary("ffmpeg", "ffmpeg -hide_banner -version");
-const ffprobe = binary("ffprobe", "ffprobe -hide_banner -version");
-const ytdlp = binary("yt-dlp", "yt-dlp --version");
-// The subtitles filter is libass-backed; without it caption burn-in silently
-// has no way to run, which is the feature people pay for.
-const libass = ffmpeg.ok && binary("libass", "ffmpeg -hide_banner -filters").out.includes("subtitles");
+// ── Keys ────────────────────────────────────────────────────────────────────
+const db = process.env.DATABASE_URL;
+check("config", "DATABASE_URL", !placeholder(db) && /^postgres(ql)?:\/\//.test(db || ""),
+  "A Postgres connection string. Free at neon.tech, or `brew install postgresql@16`.");
+check("config", "OPENAI_API_KEY", !placeholder(process.env.OPENAI_API_KEY) && /^sk-/.test(process.env.OPENAI_API_KEY || ""),
+  "platform.openai.com/api-keys — used for Whisper transcription (~$0.006/min of video).");
+check("config", "ANTHROPIC_API_KEY", !placeholder(process.env.ANTHROPIC_API_KEY) && /^sk-ant-/.test(process.env.ANTHROPIC_API_KEY || ""),
+  "console.anthropic.com — used to pick the best moments (~$0.10 per hour of video).");
 
-const renderOk = ffmpeg.ok && ffprobe.ok && ytdlp.ok && libass;
-console.log(`${renderOk ? GREEN + "✓" : RED + "✗"}${RESET} video rendering ${DIM}(worker only)${RESET}`);
-for (const [label, ok, fix] of [
-  ["ffmpeg", ffmpeg.ok, "brew install ffmpeg"],
-  ["ffprobe", ffprobe.ok, "ships with ffmpeg"],
-  ["yt-dlp", ytdlp.ok, "brew install yt-dlp"],
-  ["ffmpeg libass/subtitles filter", libass,
-    "Your ffmpeg was built without libass, so captions cannot be burned in.\n             brew tap homebrew-ffmpeg/ffmpeg && brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libass"],
-]) {
-  console.log(`    ${ok ? GREEN + "ok" + RESET + "      " : RED + "missing" + RESET + " "} ${label}`);
-  if (!ok) console.log(`             ${DIM}${fix}${RESET}`);
+// ── Tools ───────────────────────────────────────────────────────────────────
+const ffmpeg = sh("ffmpeg -hide_banner -version");
+check("tools", "ffmpeg", ffmpeg.ok, "brew install ffmpeg");
+check("tools", "ffprobe", sh("ffprobe -hide_banner -version").ok, "Installed with ffmpeg.");
+check("tools", "yt-dlp", sh("yt-dlp --version").ok, "brew install yt-dlp");
+check("tools", "ffmpeg can burn captions (libass)",
+  ffmpeg.ok && sh("ffmpeg -hide_banner -filters").out.includes(" subtitles "),
+  "This ffmpeg was built without libass, so captions cannot be burned in:\n" +
+  "     brew uninstall --ignore-dependencies ffmpeg\n" +
+  "     brew tap homebrew-ffmpeg/ffmpeg && brew install homebrew-ffmpeg/ffmpeg/ffmpeg");
+
+// ── Database ────────────────────────────────────────────────────────────────
+if (!placeholder(db)) {
+  const status = sh("npx prisma migrate status");
+  const text = status.out;
+  const reachable = !/P1001|Can't reach database|ENOTFOUND|ECONNREFUSED/.test(text);
+  check("database", "reachable", reachable, "Check DATABASE_URL, and that the database is running.");
+  if (reachable) {
+    check("database", "migrated", /up to date|No pending migrations/i.test(text), "npm run db:migrate");
+  }
 }
-console.log("");
 
-let blocking = 0;
-for (const [feature, items] of groups) {
-  const broken = items.filter((i) => i.state !== "ok");
-  const icon = broken.length === 0 ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
-  console.log(`${icon} ${feature}`);
-
+// ── Report ──────────────────────────────────────────────────────────────────
+console.log("\nClipCore check\n");
+let failing = 0;
+for (const group of ["config", "tools", "database"]) {
+  const items = checks.filter((c) => c.group === group);
+  if (items.length === 0) continue;
+  console.log(`${items.every((i) => i.ok) ? GREEN + "✓" : RED + "✗"}${RESET} ${group}`);
   for (const item of items) {
-    if (item.state === "ok") {
-      console.log(`    ${GREEN}ok${RESET}       ${item.key}`);
+    if (item.ok) {
+      console.log(`    ${GREEN}ok${RESET}       ${item.label}`);
     } else {
-      blocking++;
-      const label = item.state === "missing" ? `${RED}not set${RESET}` : `${YELLOW}invalid${RESET}`;
-      console.log(`    ${label}  ${item.key}`);
+      failing++;
+      console.log(`    ${RED}missing${RESET}  ${item.label}`);
       console.log(`             ${DIM}${item.fix}${RESET}`);
-      if (item.state === "invalid") {
-        console.log(`             ${DIM}currently: ${item.value.slice(0, 18)}…${RESET}`);
-      }
     }
   }
   console.log("");
 }
 
-if (blocking === 0) {
-  console.log(`${GREEN}Everything checks out.${RESET} Run: npm run dev\n`);
+if (failing === 0) {
+  console.log(`${GREEN}Ready.${RESET} Run: npm run dev\n`);
 } else {
-  console.log(`${YELLOW}${blocking} value${blocking === 1 ? "" : "s"} still to fill in.${RESET}`);
-  console.log(`${DIM}Walkthrough: docs/LOCAL_SETUP.md`);
-  console.log(`Restart the dev server after editing .env — it reads it at boot.${RESET}\n`);
+  console.log(`${YELLOW}${failing} thing${failing === 1 ? "" : "s"} to fix.${RESET} ${DIM}Restart npm run dev after editing .env.${RESET}\n`);
+  process.exitCode = 1;
 }
