@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { FFMPEG, FFPROBE, YTDLP } from "./binaries.js";
 
 /**
  * ffmpeg / ffprobe wrappers.
@@ -8,9 +9,6 @@ import { spawn } from "node:child_process";
  * input is a command-injection bug waiting to happen.
  */
 
-const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
-const FFPROBE = process.env.FFPROBE_PATH || "ffprobe";
-const YTDLP = process.env.YTDLP_PATH || "yt-dlp";
 
 /**
  * Run a binary and collect its output.
@@ -260,9 +258,8 @@ export async function renderClip({
   if (subtitlePath && !(await hasSubtitlesFilter())) {
     const { PermanentError } = await import("./errors.js");
     throw new PermanentError(
-      "ffmpeg was built without libass, so captions can't be burned in. Fix: " +
-        "brew uninstall --ignore-dependencies ffmpeg && brew tap homebrew-ffmpeg/ffmpeg && " +
-        "brew install homebrew-ffmpeg/ffmpeg/ffmpeg — then restart and press Retry."
+      "ffmpeg was built without libass, so captions can't be burned in. " +
+        "Fix: brew install ffmpeg-full — then restart and press Retry."
     );
   }
 

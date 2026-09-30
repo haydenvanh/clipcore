@@ -11,6 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
+import { FFMPEG, FFPROBE } from "../worker/lib/binaries.js";
 
 const RED = "\x1b[31m", GREEN = "\x1b[32m", YELLOW = "\x1b[33m", DIM = "\x1b[2m", RESET = "\x1b[0m";
 
@@ -42,15 +43,17 @@ check("config", "ANTHROPIC_API_KEY", !placeholder(process.env.ANTHROPIC_API_KEY)
   "console.anthropic.com — used to pick the best moments (~$0.10 per hour of video).");
 
 // ── Tools ───────────────────────────────────────────────────────────────────
-const ffmpeg = sh("ffmpeg -hide_banner -version");
-check("tools", "ffmpeg", ffmpeg.ok, "brew install ffmpeg");
-check("tools", "ffprobe", sh("ffprobe -hide_banner -version").ok, "Installed with ffmpeg.");
+// Same resolution the worker uses, so this checks the ffmpeg that will
+// actually run — not just whichever one is first on PATH.
+const ffmpeg = sh(`"${FFMPEG}" -hide_banner -version`);
+check("tools", `ffmpeg ${DIM}(${FFMPEG})${RESET}`, ffmpeg.ok, "brew install ffmpeg-full");
+check("tools", "ffprobe", sh(`"${FFPROBE}" -hide_banner -version`).ok, "Installed with ffmpeg.");
 check("tools", "yt-dlp", sh("yt-dlp --version").ok, "brew install yt-dlp");
 check("tools", "ffmpeg can burn captions (libass)",
-  ffmpeg.ok && sh("ffmpeg -hide_banner -filters").out.includes(" subtitles "),
-  "This ffmpeg was built without libass, so captions cannot be burned in:\n" +
-  "     brew uninstall --ignore-dependencies ffmpeg\n" +
-  "     brew tap homebrew-ffmpeg/ffmpeg && brew install homebrew-ffmpeg/ffmpeg/ffmpeg");
+  ffmpeg.ok && / subtitles /.test(sh(`"${FFMPEG}" -hide_banner -filters`).out),
+  "This ffmpeg has no libass, so captions can't be burned in. Install the full build\n" +
+  "     (prebuilt, and it sits alongside your current ffmpeg rather than replacing it):\n" +
+  "     brew install ffmpeg-full");
 
 // ── Database ────────────────────────────────────────────────────────────────
 if (!placeholder(db)) {

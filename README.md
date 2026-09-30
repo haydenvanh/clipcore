@@ -16,16 +16,13 @@ Single user, runs on your own machine. There is no sign-in.
 **1. Tools**
 
 ```bash
-brew install yt-dlp
-
-# ffmpeg must be built with libass, or captions can't be burned in.
-# Homebrew's default ffmpeg currently isn't, so use this tap:
-brew tap homebrew-ffmpeg/ffmpeg
-brew install homebrew-ffmpeg/ffmpeg/ffmpeg
+brew install yt-dlp ffmpeg-full
 ```
 
-If you already have Homebrew's plain `ffmpeg`, run
-`brew uninstall --ignore-dependencies ffmpeg` first.
+`ffmpeg-full` rather than plain `ffmpeg`: Homebrew's plain formula is built
+without libass, so it can't burn captions in. `ffmpeg-full` is prebuilt and
+installs alongside any existing ffmpeg rather than replacing it; ClipCore finds
+it automatically.
 
 **2. Config**
 
@@ -102,7 +99,7 @@ You pay only for the two APIs:
 | Symptom | Fix |
 | :--- | :--- |
 | Video stuck at "Queued" | The worker isn't running. Use `npm run dev`, not `npm run dev:web`. |
-| "ffmpeg was built without libass" | Reinstall ffmpeg from the tap in step 1, restart, press Retry. |
+| "ffmpeg was built without libass" | `brew install ffmpeg-full`, restart, press Retry. |
 | "OPENAI_API_KEY is not set" | Add it to `.env`, restart `npm run dev`, press Retry. |
 | "This video is private / unavailable / age-restricted" | yt-dlp can't fetch it without signing in. Try another video. |
 | Anything else | `npm run doctor`. The full error is shown on the video's page. |
