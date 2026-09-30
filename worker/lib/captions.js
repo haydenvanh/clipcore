@@ -196,7 +196,10 @@ function header(preset, { width, height }) {
   return [
     "[Script Info]",
     "ScriptType: v4.00+",
-    "WrapStyle: 2",
+    // Smart wrapping, lines broken evenly. Events are sized to fit in at most
+    // two lines (see lineCharBudget); with no wrapping at all a long line runs
+    // off both edges of a vertical frame instead.
+    "WrapStyle: 0",
     "ScaledBorderAndShadow: yes",
     `PlayResX: ${width}`,
     `PlayResY: ${height}`,
@@ -217,7 +220,7 @@ function header(preset, { width, height }) {
       preset.outlineWidth,
       preset.shadow,
       alignment,
-      "80", "80",
+      SIDE_MARGIN, SIDE_MARGIN,
       preset.marginV,
       "1",
     ].join(","),
@@ -227,28 +230,54 @@ function header(preset, { width, height }) {
   ].join("\n");
 }
 
+/** Horizontal margin on each side of the caption, in canvas pixels. */
+const SIDE_MARGIN = 80;
+
+/**
+ * How many characters fit across one caption line.
+ *
+ * An estimate from average glyph width — heavy uppercase faces like Arial
+ * Black run ~0.78em a character, mixed case ~0.55em — erring narrow, since
+ * libass wraps anything that still doesn't fit.
+ */
+export function lineCharBudget(preset, { width }) {
+  const usable = width - 2 * SIDE_MARGIN - 2 * (preset.outlineWidth ?? 0);
+  const perChar = preset.fontSize * (preset.uppercase ? 0.78 : 0.55);
+  return Math.max(6, Math.floor(usable / perChar));
+}
+
 /**
  * Group words into caption lines.
  *
- * Splits on the word budget, but also on a pause longer than `maxGap` — a
- * caption that spans a two-second silence reads as though the speaker never
- * stopped, which is the most common way auto-captions feel wrong.
+ * Splits on the word budget and the character budget, but also on a pause
+ * longer than `maxGap` — a caption that spans a two-second silence reads as
+ * though the speaker never stopped, which is the most common way auto-captions
+ * feel wrong.
  */
-export function groupWords(words, { maxWordsPerLine = 5, maxGap = 0.7, maxDuration = 4 } = {}) {
+export function groupWords(words, { maxWordsPerLine = 5, maxChars = Infinity, maxGap = 0.7, maxDuration = 4 } = {}) {
   const lines = [];
   let current = [];
+  let chars = 0;
 
   for (const word of words) {
+    const length = String(word.w).length;
     if (current.length > 0) {
       const previous = current[current.length - 1];
       const gap = word.start - previous.end;
       const duration = word.end - current[0].start;
 
-      if (current.length >= maxWordsPerLine || gap > maxGap || duration > maxDuration) {
+      if (
+        current.length >= maxWordsPerLine ||
+        chars + 1 + length > maxChars ||
+        gap > maxGap ||
+        duration > maxDuration
+      ) {
         lines.push(current);
         current = [];
+        chars = 0;
       }
     }
+    chars += (current.length > 0 ? 1 : 0) + length;
     current.push(word);
   }
 
@@ -284,7 +313,11 @@ export function buildAss(words, {
     }))
     .filter((w) => w.end > w.start);
 
-  const lines = groupWords(windowed, { maxWordsPerLine: preset.maxWordsPerLine });
+  const lines = groupWords(windowed, {
+    maxWordsPerLine: preset.maxWordsPerLine,
+    // At most two lines on screen at once.
+    maxChars: 2 * lineCharBudget(preset, resolution),
+  });
 
   const events = lines.map((line) => {
     const start = line[0].start;

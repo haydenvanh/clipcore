@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   assTime, assColor, escapeAssText, groupWords, buildAss, buildSrt,
-  CAPTION_PRESETS, RESOLUTIONS,
+  CAPTION_PRESETS, RESOLUTIONS, lineCharBudget,
 } from "../worker/lib/captions.js";
 
 const WORDS = [
@@ -68,6 +68,45 @@ describe("groupWords", () => {
 
   it("returns nothing for no words", () => {
     expect(groupWords([])).toEqual([]);
+  });
+
+  it("respects the character budget, counting the spaces between words", () => {
+    const lines = groupWords(WORDS, { maxWordsPerLine: 10, maxChars: 12, maxGap: 99 });
+    for (const line of lines) expect(line.map((w) => w.w).join(" ").length).toBeLessThanOrEqual(12);
+    expect(lines.flat()).toHaveLength(WORDS.length);
+  });
+
+  it("still emits a single word longer than the budget", () => {
+    const lines = groupWords([{ w: "incomprehensibilities", start: 0, end: 1 }], { maxChars: 5 });
+    expect(lines).toHaveLength(1);
+  });
+});
+
+describe("caption width — never wider than the frame", () => {
+  // Regression: 5 uppercase Arial Black words at 86px with wrapping disabled
+  // ran off both edges of a 1080px-wide vertical frame.
+  const long = "COOL THING ABOUT THESE GUYS REALLY REALLY LONG TRUNKS AND THAT'S PRETTY MUCH ALL"
+    .split(" ")
+    .map((w, i) => ({ w, start: i * 0.3, end: i * 0.3 + 0.28 }));
+
+  it("lets libass wrap instead of clipping", () => {
+    expect(buildAss(long, { style: "KARAOKE" })).toContain("WrapStyle: 0");
+  });
+
+  it("keeps every caption within two lines' worth of characters", () => {
+    for (const style of Object.keys(CAPTION_PRESETS)) {
+      const budget = lineCharBudget(resolveStyle(style), RESOLUTIONS.RATIO_9_16);
+      const events = buildAss(long, { style }).split("\n").filter((l) => l.startsWith("Dialogue:"));
+      for (const event of events) {
+        const text = event.split(",").slice(9).join(",").replace(/\{[^}]*\}/g, "");
+        expect(text.length).toBeLessThanOrEqual(Math.max(2 * budget, 13));
+      }
+    }
+  });
+
+  it("fits fewer characters on a narrow frame than a wide one", () => {
+    const style = resolveStyle("KARAOKE");
+    expect(lineCharBudget(style, RESOLUTIONS.RATIO_9_16)).toBeLessThan(lineCharBudget(style, RESOLUTIONS.RATIO_16_9));
   });
 });
 
