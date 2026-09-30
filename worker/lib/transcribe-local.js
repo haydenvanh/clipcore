@@ -25,6 +25,27 @@ const CLI_CANDIDATES = ["/opt/homebrew/bin/whisper-cli", "/usr/local/bin/whisper
 export const WHISPER_CLI =
   process.env.WHISPER_CPP_PATH || CLI_CANDIDATES.find((p) => fs.existsSync(p)) || "whisper-cli";
 
+/**
+ * A short, properly punctuated line in each language, given to the decoder as
+ * a prompt on every 30-second window.
+ *
+ * Without it, whisper.cpp can slip into all-lowercase, unpunctuated text
+ * partway through a long recording and stay there for the rest of it, because
+ * each window is conditioned on the one before. On a real 2h47m podcast that
+ * was the first 140 minutes. Sentence boundaries drive both clip selection and
+ * captions, so this matters.
+ */
+const LANGUAGE_PROMPTS = {
+  en: "Hello, and welcome back to the show. How are you doing? I'm great, thanks!",
+  es: "Hola, y bienvenidos de nuevo al programa. ¿Cómo estás? ¡Muy bien, gracias!",
+  fr: "Bonjour, et bienvenue dans l'émission. Comment allez-vous ? Très bien, merci !",
+  de: "Hallo und willkommen zurück in der Sendung. Wie geht es dir? Sehr gut, danke!",
+  it: "Ciao, e bentornati nel programma. Come stai? Benissimo, grazie!",
+  pt: "Olá, e bem-vindos de volta ao programa. Como você está? Muito bem, obrigado!",
+  ja: "こんにちは、番組へようこそ。お元気ですか？はい、元気です！",
+  ko: "안녕하세요, 방송에 다시 오신 것을 환영합니다. 잘 지내셨어요? 네, 잘 지냈어요!",
+};
+
 /** A word this short was squashed by the aligner rather than spoken that fast. */
 const SQUASHED_SEC = 0.08;
 /** Rough speaking time for a word, used to un-squash one. */
@@ -121,42 +142,69 @@ export function parseWhisperCppJson(payload) {
   };
 }
 
-/**
- * Transcribe a 16 kHz mono WAV with whisper.cpp.
- *
- * @param {string} audioPath see ffmpeg.extractAudioWav
- * @param {{language?: string}} [options]
- * @returns {Promise<{language:string, text:string, words:Array}>}
- */
-export async function transcribeLocally(audioPath, { language } = {}) {
-  const problem = localTranscriptionProblem();
-  if (problem) throw new PermanentError(problem);
+/** Read the language whisper.cpp reports on stderr, e.g. "auto-detected language: en (p = 0.99)". */
+export function parseDetectedLanguage(stderr) {
+  return /auto-detected language:\s*([a-z]{2,3})\b/.exec(String(stderr))?.[1] ?? null;
+}
 
-  const outBase = path.join(path.dirname(audioPath), "whisper-out");
-  const threads = Math.max(2, Math.min(8, os.availableParallelism?.() ?? os.cpus().length));
-
+async function runWhisper(args, options) {
   try {
-    await run(
-      WHISPER_CLI,
-      [
-        "-m", LOCAL_MODEL_PATH,
-        "-f", audioPath,
-        "-l", language || "auto",
-        "-t", String(threads),
-        "-ml", "1", "-sow",
-        "-oj", "-of", outBase,
-        "-np",
-      ],
-      // Local runs scale with length; allow three hours for very long sources.
-      { timeoutMs: 3 * 60 * 60 * 1000 }
-    );
+    return await run(WHISPER_CLI, ["-m", LOCAL_MODEL_PATH, ...args], options);
   } catch (error) {
     if (/not installed or not on PATH/.test(error.message)) {
       throw new PermanentError("whisper.cpp isn't installed. Run: brew install whisper-cpp — then restart and press Retry.");
     }
     throw error;
   }
+}
+
+/**
+ * Detect the spoken language from a 30-second sample.
+ *
+ * Sampled a little way in rather than at 0:00, which is often an intro jingle
+ * that whisper happily labels as English.
+ */
+export async function detectLanguage(audioPath, { durationSec = 0 } = {}) {
+  const offsetMs = Math.round(Math.min(120, Math.max(0, durationSec - 30) * 0.2) * 1000);
+  const { stderr } = await runWhisper(
+    ["-f", audioPath, "-l", "auto", "-dl", "-ot", String(offsetMs)],
+    { timeoutMs: 5 * 60 * 1000 }
+  );
+  return parseDetectedLanguage(stderr);
+}
+
+/**
+ * Transcribe a 16 kHz mono WAV with whisper.cpp.
+ *
+ * @param {string} audioPath see ffmpeg.extractAudioWav
+ * @param {{language?: string, durationSec?: number}} [options]
+ * @returns {Promise<{language:string, text:string, words:Array}>}
+ */
+export async function transcribeLocally(audioPath, { language, durationSec } = {}) {
+  const problem = localTranscriptionProblem();
+  if (problem) throw new PermanentError(problem);
+
+  const lang = language || (await detectLanguage(audioPath, { durationSec })) || "auto";
+  const prompt = LANGUAGE_PROMPTS[lang];
+
+  const outBase = path.join(path.dirname(audioPath), "whisper-out");
+  const threads = Math.max(2, Math.min(8, os.availableParallelism?.() ?? os.cpus().length));
+
+  await runWhisper(
+    [
+      "-f", audioPath,
+      "-l", lang,
+      "-t", String(threads),
+      "-ml", "1", "-sow",
+      ...(prompt ? ["--prompt", prompt, "--carry-initial-prompt"] : []),
+      "-oj", "-of", outBase,
+      "-np",
+    ],
+    // Local runs scale with length; allow three hours for very long sources.
+    { timeoutMs: 3 * 60 * 60 * 1000 }
+  );
 
   const payload = JSON.parse(await fs.promises.readFile(`${outBase}.json`, "utf8"));
-  return parseWhisperCppJson(payload);
+  const result = parseWhisperCppJson(payload);
+  return lang !== "auto" ? { ...result, language: lang } : result;
 }

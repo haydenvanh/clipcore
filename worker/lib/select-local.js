@@ -1,5 +1,4 @@
 import { computeSignals } from "./signals.js";
-import { dedupeOverlaps } from "./analyze.js";
 
 /**
  * Pick clip-worthy moments without a language model.
@@ -50,6 +49,23 @@ export function splitSentences(words) {
   return sentences.filter((s) => s.length > 0);
 }
 
+/**
+ * Take the best candidates, best first, skipping any that land within
+ * `minGapSec` of one already taken.
+ *
+ * Plain overlap removal isn't enough: the best-scoring stretch of a podcast
+ * otherwise yields five back-to-back slices of the same conversation.
+ */
+export function pickSpread(candidates, { count, minGapSec = 0 }) {
+  const picked = [];
+  for (const c of candidates) {
+    if (picked.length >= count) break;
+    const clashes = picked.some((p) => c.startSec < p.endSec + minGapSec && p.startSec < c.endSec + minGapSec);
+    if (!clashes) picked.push(c);
+  }
+  return picked;
+}
+
 /** 1.0 inside the ideal range, falling off either side. */
 export function lengthFit(durationSec, { ideal = [25, 45], min = 12, max = 60 } = {}) {
   const [lo, hi] = ideal;
@@ -64,6 +80,20 @@ function firstWord(sentence) {
 
 function textOf(words) {
   return words.map((w) => w.w).join(" ").replace(/\s+([,.!?;:])/g, "$1").trim();
+}
+
+/**
+ * The opening sentence, extended by the ones after it while it's too short to
+ * say anything — "Crazy." makes a poor title; "Crazy. Remember when they
+ * sliced Jett." does not.
+ */
+export function openingWords(sentences, minChars = 25) {
+  const words = [];
+  for (const sentence of sentences) {
+    words.push(...sentence);
+    if (textOf(words).length >= minChars) break;
+  }
+  return words;
 }
 
 /** A readable title from the opening sentence, cut on a word boundary. */
@@ -137,7 +167,7 @@ export function selectMomentsLocally(words, { videoDuration, targetCount = 10 } 
       candidates.push({
         startSec: Math.max(0, startSec - 0.15), // a breath before the first word
         endSec: Math.min(total, endSec + 0.3), // and after the last
-        firstSentence: sentences[i],
+        opening: openingWords(sentences.slice(i, j + 1)),
         windowWords,
         signals,
         standalone,
@@ -154,7 +184,7 @@ export function selectMomentsLocally(words, { videoDuration, targetCount = 10 } 
     candidates.push({
       startSec: Math.max(0, words[0].start - 0.15),
       endSec: Math.min(total, Math.min(words[words.length - 1].end + 0.3, words[0].start + 60)),
-      firstSentence: sentences[0],
+      opening: openingWords(sentences),
       windowWords: words,
       signals,
       standalone: 1,
@@ -165,13 +195,16 @@ export function selectMomentsLocally(words, { videoDuration, targetCount = 10 } 
 
   candidates.sort((a, b) => b.viral - a.viral);
 
-  const picked = dedupeOverlaps(candidates, { maxOverlapRatio: 0.2 }).slice(0, targetCount);
+  // Spread picks across the video: up to five minutes apart on a long
+  // podcast, a few seconds on a short clip.
+  const minGapSec = Math.min(300, total / (targetCount * 2));
+  const picked = pickSpread(candidates, { count: targetCount, minGapSec });
 
   return picked.map((c) => ({
     startSec: Math.round(c.startSec * 100) / 100,
     endSec: Math.round(c.endSec * 100) / 100,
-    title: titleFrom(c.firstSentence),
-    hook: textOf(c.firstSentence).slice(0, 500),
+    title: titleFrom(c.opening),
+    hook: textOf(c.opening).slice(0, 500),
     summary: textOf(c.windowWords).slice(0, 280),
     reasoning: explain(c.signals, c.standalone),
     viralScore: to100(c.viral),

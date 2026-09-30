@@ -144,10 +144,10 @@ async function transcribeWithApi(videoPath, durationSec, dir) {
 }
 
 /** Transcribe on this machine with whisper.cpp, in one pass. */
-async function transcribeOnDevice(videoPath, dir) {
+async function transcribeOnDevice(videoPath, durationSec, dir) {
   const audioPath = path.join(dir, "audio.wav");
   await extractAudioWav(videoPath, audioPath);
-  return transcribeLocally(audioPath);
+  return transcribeLocally(audioPath, { durationSec });
 }
 
 /**
@@ -176,7 +176,7 @@ export async function transcribeStep({ videoId }) {
     const durationSec = video.durationSec || (await probe(videoPath)).durationSec;
     const result = useApi
       ? await transcribeWithApi(videoPath, durationSec, dir)
-      : await transcribeOnDevice(videoPath, dir);
+      : await transcribeOnDevice(videoPath, durationSec, dir);
     const model = useApi ? WHISPER_MODEL_ID : LOCAL_MODEL_NAME;
 
     if (result.words.length === 0) {

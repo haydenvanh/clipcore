@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { parseWhisperCppJson, repairSquashedWords } from "../worker/lib/transcribe-local.js";
-import { selectMomentsLocally, splitSentences, lengthFit, titleFrom } from "../worker/lib/select-local.js";
+import { parseWhisperCppJson, repairSquashedWords, parseDetectedLanguage } from "../worker/lib/transcribe-local.js";
+import {
+  selectMomentsLocally, splitSentences, lengthFit, titleFrom, pickSpread, openingWords,
+} from "../worker/lib/select-local.js";
 
 /** Words at a steady pace from a sentence list, with a pause between sentences. */
 function speak(sentences, { wordSec = 0.35, pauseSec = 0.4, startSec = 0 } = {}) {
@@ -50,6 +52,31 @@ describe("parseWhisperCppJson — whisper.cpp output to transcript words", () =>
 
   it("defaults the language when whisper.cpp doesn't report one", () => {
     expect(parseWhisperCppJson({ transcription: [] }).language).toBe("en");
+  });
+});
+
+describe("parseDetectedLanguage", () => {
+  it("reads the language whisper.cpp reports", () => {
+    expect(parseDetectedLanguage("whisper_full_with_state: auto-detected language: en (p = 0.999887)\n")).toBe("en");
+    expect(parseDetectedLanguage("auto-detected language: haw (p = 0.41)")).toBe("haw");
+  });
+
+  it("returns null when there's nothing to read", () => {
+    expect(parseDetectedLanguage("some other log line")).toBeNull();
+    expect(parseDetectedLanguage(undefined)).toBeNull();
+  });
+});
+
+describe("pickSpread", () => {
+  const c = (startSec, endSec) => ({ startSec, endSec });
+
+  it("keeps order and skips anything within the gap of an earlier pick", () => {
+    const picked = pickSpread([c(100, 130), c(140, 170), c(200, 230), c(0, 30)], { count: 10, minGapSec: 20 });
+    expect(picked).toEqual([c(100, 130), c(200, 230), c(0, 30)]);
+  });
+
+  it("stops at the requested count", () => {
+    expect(pickSpread([c(0, 1), c(10, 11), c(20, 21)], { count: 2 })).toHaveLength(2);
   });
 });
 
@@ -109,6 +136,21 @@ describe("selectMomentsLocally — clips without an AI model", () => {
       expect([...starts].some((s) => Math.abs(m.startSec - (s - 0.15)) < 0.02 || (s < 0.15 && m.startSec === 0))).toBe(true);
       expect([...ends].some((e) => Math.abs(m.endSec - Math.min(duration, e + 0.3)) < 0.02)).toBe(true);
       expect(m.endSec - m.startSec).toBeLessThanOrEqual(60.5);
+    }
+  });
+
+  it("spreads clips across a long video instead of clustering them", () => {
+    // Lively speech only in the last tenth; everything else flat. Clips may
+    // favour the lively part but must not stack up back to back there.
+    const flat = Array.from({ length: 400 }, (_, i) => `The report covers item ${i} in the list.`);
+    const lively = Array.from({ length: 40 }, (_, i) => `Wait, this is insane number ${i}! Why does it work?`);
+    const words = speak([...flat, ...lively]);
+    const duration = words.at(-1).end;
+    const moments = selectMomentsLocally(words, { videoDuration: duration, targetCount: 10 });
+    const minGap = Math.min(300, duration / 20);
+    const sorted = [...moments].sort((a, b) => a.startSec - b.startSec);
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i].startSec - sorted[i - 1].endSec).toBeGreaterThanOrEqual(minGap - 1e-6);
     }
   });
 
@@ -179,6 +221,14 @@ describe("helpers", () => {
     expect(lengthFit(30)).toBe(1);
     expect(lengthFit(10)).toBeLessThan(lengthFit(20));
     expect(lengthFit(58)).toBeLessThan(1);
+  });
+
+  it("extends a too-short opening sentence with the next one", () => {
+    const sentences = splitSentences(speak(["Crazy.", "Remember when they sliced him.", "Third one here."]));
+    expect(titleFrom(openingWords(sentences))).toBe("Crazy. Remember when they sliced him");
+    expect(titleFrom(openingWords(splitSentences(speak(["This opening sentence is already long enough.", "Next."]))))).toBe(
+      "This opening sentence is already long enough"
+    );
   });
 
   it("cuts long titles on a word boundary", () => {
