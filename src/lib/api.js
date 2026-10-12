@@ -1,17 +1,7 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
 
-/**
- * Shared helpers for route handlers.
- *
- * ClipCore is a private, single-user tool: there is no sign-in. Every record
- * still belongs to a User row, because Video, Clip and Render all carry a
- * userId and keeping one owner row is a far smaller change than threading its
- * removal through the schema, the worker and every query. That owner is created
- * on first use and returned by getOwner().
- */
-
-export const OWNER_ID = "local-owner";
+/** Shared helpers for route handlers. */
 
 export class ApiError extends Error {
   constructor(status, message) {
@@ -21,31 +11,17 @@ export class ApiError extends Error {
   }
 }
 
-let ownerReady = null;
-
 /**
- * The single local user that owns everything.
+ * The signed-in user, or a 401.
  *
- * Upserted once per server process and memoised, so routes can call it freely
- * without a write on every request.
+ * Every route that reads or writes a user's data starts here and scopes its
+ * queries by the returned id. The proxy's cookie check only decides whether to
+ * show a page; this is the actual boundary.
  */
-export async function getOwner() {
-  if (!ownerReady) {
-    ownerReady = prisma.user
-      .upsert({
-        where: { id: OWNER_ID },
-        create: { id: OWNER_ID, name: "Owner" },
-        update: {},
-        select: { id: true, name: true },
-      })
-      .catch((error) => {
-        // Don't cache a failure: a database that was briefly unreachable
-        // should not poison every later request in this process.
-        ownerReady = null;
-        throw error;
-      });
-  }
-  return ownerReady;
+export async function requireUser() {
+  const user = await getSessionUser();
+  if (!user) throw new ApiError(401, "Sign in to continue.");
+  return user;
 }
 
 /** Parse a JSON body, rejecting anything that is not a JSON object. */
@@ -65,19 +41,18 @@ export async function readJson(req) {
 /**
  * Map a thrown error to a response.
  *
- * The real message is returned rather than a generic "something went wrong":
- * the only person who ever sees this is the owner, and hiding the cause from
- * them just means reading server logs to find out what broke.
+ * ApiErrors carry a message written for the user. Anything else is unexpected:
+ * its real message is shown in development, but in production it can contain
+ * database or file-system details, so users get a generic one and the detail
+ * goes to the server log.
  */
 export function errorResponse(scope, error) {
   if (error instanceof ApiError) {
     return NextResponse.json({ error: error.message }, { status: error.status });
   }
   console.error(`[${scope}]`, error);
-  return NextResponse.json(
-    { error: error?.message || "Something went wrong." },
-    { status: 500 }
-  );
+  const message = process.env.NODE_ENV === "production" ? "Something went wrong." : error?.message;
+  return NextResponse.json({ error: message || "Something went wrong." }, { status: 500 });
 }
 
 /** Wrap a handler so thrown ApiErrors become responses. */

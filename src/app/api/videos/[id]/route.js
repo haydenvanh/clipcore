@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { mediaUrl, deletePrefix, safeFilename } from "@/lib/storage";
-import { ApiError, handler, getOwner } from "@/lib/api";
+import { ApiError, handler, requireUser } from "@/lib/api";
 
 /**
  * One video with its clips, ready to render in the UI: each clip carries a
@@ -9,11 +9,11 @@ import { ApiError, handler, getOwner } from "@/lib/api";
  * no second round of requests to show anything.
  */
 export const GET = handler("VIDEO_GET", async (req, ctx) => {
-  const owner = await getOwner();
+  const user = await requireUser();
   const { id } = await ctx.params;
 
   const video = await prisma.video.findFirst({
-    where: { id, userId: owner.id },
+    where: { id, userId: user.id },
     include: {
       clips: { orderBy: { order: "asc" }, include: { renders: { orderBy: { createdAt: "asc" } } } },
       transcript: { select: { language: true } },
@@ -77,11 +77,11 @@ export const GET = handler("VIDEO_GET", async (req, ctx) => {
 
 /** Delete a video, everything derived from it, and its files on disk. */
 export const DELETE = handler("VIDEO_DELETE", async (req, ctx) => {
-  const owner = await getOwner();
+  const user = await requireUser();
   const { id } = await ctx.params;
 
   const video = await prisma.video.findFirst({
-    where: { id, userId: owner.id },
+    where: { id, userId: user.id },
     include: { clips: { select: { id: true } } },
   });
   if (!video) throw new ApiError(404, "Video not found.");
@@ -96,8 +96,8 @@ export const DELETE = handler("VIDEO_DELETE", async (req, ctx) => {
   // Cascades to clips, renders and the transcript.
   await prisma.video.delete({ where: { id } });
 
-  await deletePrefix(`sources/${owner.id}/${id}`);
-  await Promise.all(video.clips.map((clip) => deletePrefix(`clips/${owner.id}/${clip.id}`)));
+  await deletePrefix(`sources/${user.id}/${id}`);
+  await Promise.all(video.clips.map((clip) => deletePrefix(`clips/${user.id}/${clip.id}`)));
 
   return NextResponse.json({ deleted: true });
 });

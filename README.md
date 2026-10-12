@@ -1,14 +1,13 @@
 # ClipCore
 
-A private tool that turns a YouTube video into short vertical clips with
-captions burned in.
+Turns a YouTube video into short vertical clips with captions burned in.
 
 Paste a link → it downloads the video, transcribes it, picks the strongest
 moments, and renders each one as a 9:16 clip with word-by-word captions. Preview
 them in the browser and download the ones you want.
 
-Single user, runs entirely on your own machine. There is no sign-in, and no
-API keys or paid services are needed.
+Users sign in with Google and each sees only their own videos. Processing runs
+on the machine hosting the app, and no paid AI services are needed.
 
 ---
 
@@ -31,8 +30,21 @@ it automatically. `whisper-cpp` does the transcription, on your Mac's GPU.
 cp .env.example .env
 ```
 
-Fill in the two Postgres URLs. That's the only required config; see comments
-in `.env.example`.
+Fill in the two Postgres URLs and the four sign-in values; see comments in
+`.env.example`.
+
+**Google sign-in.** In [Google Cloud → Credentials](https://console.cloud.google.com/apis/credentials),
+create an OAuth client ID of type *Web application*. Under **Authorized
+redirect URIs** — not "Authorized JavaScript origins" — add exactly:
+
+```
+http://localhost:3000/api/auth/callback/google
+```
+
+`http`, `localhost` (not `127.0.0.1`), port `3000`, no trailing slash. Copy the
+client ID and secret into `.env`. While the consent screen is in *Testing*,
+add your Google account under **Audience → Test users**, or Google blocks the
+sign-in. `npm run doctor` prints the exact URI the app sends.
 
 **3. Install, set up the database, download the speech model**
 
@@ -111,6 +123,8 @@ None by default. Only the optional API keys above cost anything.
 
 | Symptom | Fix |
 | :--- | :--- |
+| Google: "Error 400: redirect_uri_mismatch" | The redirect URI isn't on the OAuth client whose ID is in `.env`. Add the URI `npm run doctor` prints under **Authorized redirect URIs**, save, and allow a few minutes. |
+| Google: "Access blocked: … has not completed the Google verification process" | Add your Google account under **Audience → Test users** on the consent screen. |
 | Video stuck at "Queued" | The worker isn't running. Use `npm run dev`, not `npm run dev:web`. |
 | "ffmpeg was built without libass" | `brew install ffmpeg-full`, restart, press Retry. |
 | "The speech model isn't downloaded" | `npm run setup:model`, press Retry. |
@@ -125,6 +139,7 @@ None by default. Only the optional API keys above cost anything.
 | `npm run dev` | Web app + worker |
 | `npm run doctor` | Check setup |
 | `npm run setup:model` | Download the speech model |
+| `npm run claim-videos -- you@gmail.com` | Move videos made before sign-in existed into your account |
 | `npm run db:migrate` | Apply database migrations |
 | `npm test` | Tests |
 | `npm run worker` | Worker only |
@@ -132,10 +147,9 @@ None by default. Only the optional API keys above cost anything.
 
 ## Security
 
-There's no login, so the app is bound to `127.0.0.1` and is only reachable from
-this computer. Don't change that or put it on the internet — anyone who could
-reach it could use your machine to download and process video (and your API
-keys, if you've added any).
+Every page needs a signed-in user, and every API route and media file is
+scoped to the user who owns it. In development the app is still bound to
+`127.0.0.1`, so it's only reachable from this computer.
 
 ---
 

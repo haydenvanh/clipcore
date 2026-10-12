@@ -3,19 +3,19 @@ import { prisma } from "@/lib/prisma";
 import { Queue, JOB_TYPES } from "@/lib/queue";
 import { assertSafeUrl, detectSource } from "@/lib/url-guard";
 import { mediaUrl } from "@/lib/storage";
-import { ApiError, handler, readJson, getOwner } from "@/lib/api";
+import { ApiError, handler, readJson, requireUser } from "@/lib/api";
 
 const IN_FLIGHT = ["PENDING", "EXTRACTING", "TRANSCRIBING", "ANALYZING", "RENDERING"];
 
 /** Videos, newest first, with their clips and render state. */
 export const GET = handler("VIDEOS_LIST", async (req) => {
-  const owner = await getOwner();
+  const user = await requireUser();
 
   const params = new URL(req.url).searchParams;
   const limit = Math.min(50, Math.max(1, parseInt(params.get("limit") || "20", 10) || 20));
 
   const videos = await prisma.video.findMany({
-    where: { userId: owner.id },
+    where: { userId: user.id },
     orderBy: { createdAt: "desc" },
     take: limit,
     include: {
@@ -63,7 +63,7 @@ export const GET = handler("VIDEOS_LIST", async (req) => {
  * sit in the list as "Queued" forever.
  */
 export const POST = handler("VIDEOS_CREATE", async (req) => {
-  const owner = await getOwner();
+  const user = await requireUser();
   const { sourceUrl, title } = await readJson(req);
 
   if (!sourceUrl || typeof sourceUrl !== "string") {
@@ -83,7 +83,7 @@ export const POST = handler("VIDEOS_CREATE", async (req) => {
   // Pasting the same link twice while it is still processing is almost always
   // a double-click; return the existing job rather than doing the work twice.
   const existing = await prisma.video.findFirst({
-    where: { userId: owner.id, sourceUrl: sourceUrl.trim(), status: { in: IN_FLIGHT } },
+    where: { userId: user.id, sourceUrl: sourceUrl.trim(), status: { in: IN_FLIGHT } },
     select: { id: true, status: true },
   });
   if (existing) {
@@ -93,7 +93,7 @@ export const POST = handler("VIDEOS_CREATE", async (req) => {
   const video = await prisma.$transaction(async (tx) => {
     const created = await tx.video.create({
       data: {
-        userId: owner.id,
+        userId: user.id,
         source,
         sourceUrl: sourceUrl.trim(),
         title: typeof title === "string" && title.trim() ? title.trim().slice(0, 200) : null,

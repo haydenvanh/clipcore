@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { Queue, JOB_TYPES } from "@/lib/queue";
-import { ApiError, handler, getOwner } from "@/lib/api";
+import { ApiError, handler, requireUser } from "@/lib/api";
 import { resumePoint } from "@/lib/resume";
 
 /**
@@ -12,11 +12,11 @@ import { resumePoint } from "@/lib/resume";
  * and all of the API cost.
  */
 export const POST = handler("VIDEO_RETRY", async (req, ctx) => {
-  const owner = await getOwner();
+  const user = await requireUser();
   const { id } = await ctx.params;
 
   const video = await prisma.video.findFirst({
-    where: { id, userId: owner.id },
+    where: { id, userId: user.id },
     include: {
       transcript: { select: { id: true } },
       clips: { select: { id: true, renders: { select: { id: true, status: true } } } },

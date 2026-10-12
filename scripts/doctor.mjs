@@ -40,6 +40,17 @@ const optional = (group, label, ok, note) => checks.push({ group, label, ok, fix
 const db = process.env.DATABASE_URL;
 check("config", "DATABASE_URL", !placeholder(db) && /^postgres(ql)?:\/\//.test(db || ""),
   "A Postgres connection string. Free at neon.tech, or `brew install postgresql@16`.");
+// Google sign-in.
+const appUrl = process.env.NEXTAUTH_URL || "";
+check("config", "NEXTAUTH_URL", /^https?:\/\/[^/]+$/.test(appUrl),
+  "The address you open the app at, with no trailing slash: http://localhost:3000");
+check("config", "NEXTAUTH_SECRET", (process.env.NEXTAUTH_SECRET || "").length >= 32,
+  "A random secret that signs session cookies. Generate one: openssl rand -base64 32");
+check("config", "GOOGLE_CLIENT_ID", /\.apps\.googleusercontent\.com$/.test(process.env.GOOGLE_CLIENT_ID || ""),
+  "Google Cloud → APIs & Services → Credentials → your OAuth client (Web application).");
+check("config", "GOOGLE_CLIENT_SECRET", !placeholder(process.env.GOOGLE_CLIENT_SECRET) && /^GOCSPX-/.test(process.env.GOOGLE_CLIENT_SECRET || ""),
+  "Shown next to the client ID on the same OAuth client.");
+
 const hasOpenAi = !placeholder(process.env.OPENAI_API_KEY) && /^sk-/.test(process.env.OPENAI_API_KEY || "");
 optional("config", "OPENAI_API_KEY", hasOpenAi,
   "Optional. Without it, transcription runs locally with whisper.cpp (free).");
@@ -97,6 +108,12 @@ for (const group of ["config", "tools", "database"]) {
     }
   }
   console.log("");
+}
+
+if (/^https?:\/\/[^/]+$/.test(appUrl)) {
+  console.log(`${DIM}Google sign-in: this exact URL must be listed under "Authorized redirect URIs"`);
+  console.log(`on the OAuth client ${(process.env.GOOGLE_CLIENT_ID || "").slice(0, 24)}… in Google Cloud:${RESET}`);
+  console.log(`    ${appUrl}/api/auth/callback/google\n`);
 }
 
 if (failing === 0) {

@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { mediaUrl, safeFilename } from "@/lib/storage";
-import { ApiError, handler, getOwner } from "@/lib/api";
+import { ApiError, handler, requireUser } from "@/lib/api";
 
 /** One clip, its scores, and signed URLs for its renders. */
 export const GET = handler("CLIP_GET", async (req, ctx) => {
-  const user = await getOwner();
+  const user = await requireUser();
   const { id } = await ctx.params;
 
   const clip = await prisma.clip.findFirst({

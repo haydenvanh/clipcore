@@ -14,6 +14,7 @@
     "test:watch": "vitest",
     "doctor": "node scripts/doctor.mjs",
     "setup:model": "node scripts/setup-model.mjs",
+    "claim-videos": "node scripts/claim-local-videos.mjs",
     "db:migrate": "prisma migrate deploy",
     "postinstall": "prisma generate"
   },
@@ -24,6 +25,7 @@
     "@prisma/adapter-pg": "^7.7.0",
     "@prisma/client": "^7.7.0",
     "next": "16.2.3",
+    "next-auth": "^4.24.15",
     "pg": "^8.20.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",

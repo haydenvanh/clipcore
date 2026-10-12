@@ -1,13 +1,12 @@
-// ClipCore — private, single-user schema.
+// ClipCore schema.
 //
-//   Video -> Transcript
-//         -> Clip -> Render
+//   User -> Video -> Transcript
+//               -> Clip -> Render
 //   Job   (the work queue, drained with FOR UPDATE SKIP LOCKED)
 //
-// There is exactly one User row (id "local-owner"), created on first use by
-// getOwner() in src/lib/api.js. It exists because every Video, Clip and Render
-// already carries a userId; keeping one owner is a much smaller change than
-// removing that column from the schema, the worker and every query.
+// Users sign in with Google (src/lib/auth.js). Sessions are stateless signed
+// cookies, so there are no Account or Session tables: a User row is matched
+// to its Google account by verified email.
 
 generator client {
   provider      = "prisma-client-js"
@@ -19,8 +18,11 @@ datasource db {
 }
 
 model User {
-  id        String   @id
+  id        String   @id @default(cuid())
+  // Null only for the legacy "local-owner" row from the single-user version.
+  email     String?  @unique
   name      String?
+  image     String?
   createdAt DateTime @default(now())
 
   videos  Video[]
