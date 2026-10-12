@@ -119,6 +119,7 @@ export async function downloadSource(url, outputPath, { maxHeight = 1080 } = {})
       "--no-simulate",
       "--socket-timeout", "30",
       "--retries", "3",
+      ...ytdlpEnvArgs(),
       "-o", outputPath,
       "--",
       url,
@@ -128,6 +129,34 @@ export async function downloadSource(url, outputPath, { maxHeight = 1080 } = {})
 
   const title = stdout.split("\n").map((line) => line.trim()).find(Boolean) || null;
   return { path: outputPath, title };
+}
+
+/**
+ * Extra yt-dlp options from the environment, for servers YouTube blocks.
+ *
+ * YouTube often refuses data-center IP addresses ("Sign in to confirm you're
+ * not a bot"). YTDLP_PROXY routes downloads through a proxy (a residential
+ * one gets through), and YTDLP_COOKIES points at an exported cookies.txt.
+ */
+export function ytdlpEnvArgs(env = process.env) {
+  const args = [];
+  if (env.YTDLP_PROXY) args.push("--proxy", env.YTDLP_PROXY);
+  if (env.YTDLP_COOKIES) args.push("--cookies", env.YTDLP_COOKIES);
+  return args;
+}
+
+/**
+ * A linked video's length in seconds, from its metadata — without downloading
+ * it. Null when the site doesn't say (live streams, some hosts).
+ */
+export async function remoteDuration(url) {
+  const { stdout } = await run(
+    YTDLP,
+    ["--skip-download", "--no-warnings", "--no-playlist", ...ytdlpEnvArgs(), "--print", "%(duration)s", "--", url],
+    { timeoutMs: 60_000 }
+  );
+  const seconds = Number(stdout.trim().split("\n")[0]);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
 }
 
 /**

@@ -128,7 +128,7 @@ export default function VideoPage({ params }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not delete.");
       toast.success("Deleted.");
-      router.push("/");
+      router.push("/dashboard");
     } catch (err) {
       toast.error(err.message);
       setBusy(null);
@@ -147,7 +147,7 @@ export default function VideoPage({ params }) {
     return (
       <div className="max-w-5xl mx-auto w-full px-5 py-16 text-center">
         <p className="text-sm font-medium">{error.message}</p>
-        <Link href="/" className="text-xs text-primary hover:underline mt-3 inline-block">
+        <Link href="/dashboard" className="text-xs text-primary hover:underline mt-3 inline-block">
           Back to your videos
         </Link>
       </div>
@@ -166,7 +166,7 @@ export default function VideoPage({ params }) {
   return (
     <div className="max-w-6xl mx-auto w-full px-5 sm:px-6 lg:px-8 py-8 space-y-8">
       <Link
-        href="/"
+        href="/dashboard"
         className="inline-flex items-center gap-1.5 text-xs text-secondary-text hover:text-primary-text transition-colors"
       >
         <FiArrowLeft /> All videos

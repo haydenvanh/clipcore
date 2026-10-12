@@ -1,24 +1,23 @@
 import { Inter } from "next/font/google";
 import { Toaster } from "react-hot-toast";
 import "./globals.css";
-import Navbar from "@/components/Navbar";
 
 const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
 
 export const metadata = {
-  title: { default: "ClipCore", template: "%s · ClipCore" },
-  description: "Turn a YouTube video into captioned vertical clips.",
-  // Private tool: keep it out of search indexes if it is ever exposed.
-  robots: { index: false, follow: false },
+  metadataBase: new URL(process.env.NEXTAUTH_URL || "http://localhost:3000"),
+  title: { default: "ClipCore — Turn long videos into viral clips", template: "%s · ClipCore" },
+  description:
+    "Paste a YouTube link. ClipCore finds the best moments and turns them into vertical clips with animated captions — ready for TikTok, Shorts, and Reels.",
+  openGraph: { type: "website", siteName: "ClipCore" },
 };
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en" className={`${inter.variable} w-full`} data-theme="slate-indigo">
       <body className={`${inter.className} min-h-dvh w-full flex flex-col antialiased bg-bg-page text-primary-text font-sans`}>
-        <Toaster position="top-right" />
-        <Navbar />
-        <main className="flex-1 flex flex-col min-h-0">{children}</main>
+        <Toaster position="top-right" toastOptions={{ style: { background: "#141417", color: "#f7f8f8", border: "1px solid #1f1f24" } }} />
+        {children}
       </body>
     </html>
   );

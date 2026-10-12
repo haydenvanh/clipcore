@@ -42,14 +42,16 @@ describe("proxy — signed-out visitors go to /login", () => {
     expect(location.searchParams.get("next")).toBe("/videos/abc?tab=clips");
   });
 
-  it("sends the home page to a plain /login", () => {
-    const location = new URL(proxy(request("/")).headers.get("location"));
-    expect(location.pathname).toBe("/login");
-    expect(location.search).toBe("");
+  it("lets the public marketing pages through", () => {
+    for (const path of ["/", "/pricing", "/login", "/terms", "/privacy"]) {
+      expect(proxy(request(path)).headers.get("location")).toBeNull();
+    }
   });
 
-  it("lets the login page through", () => {
-    expect(proxy(request("/login")).headers.get("location")).toBeNull();
+  it("protects the app pages, and doesn't treat every path as public because / is", () => {
+    for (const path of ["/dashboard", "/billing", "/videos/abc", "/clips/x"]) {
+      expect(new URL(proxy(request(path)).headers.get("location")).pathname).toBe("/login");
+    }
   });
 
   it("lets a request with a session cookie through, including chunked and secure ones", () => {
@@ -58,11 +60,11 @@ describe("proxy — signed-out visitors go to /login", () => {
       "__Secure-next-auth.session-token=abc",
       "next-auth.session-token.0=abc",
     ]) {
-      expect(proxy(request("/", cookie)).headers.get("location")).toBeNull();
+      expect(proxy(request("/dashboard", cookie)).headers.get("location")).toBeNull();
     }
   });
 
   it("isn't fooled by a similarly named cookie", () => {
-    expect(proxy(request("/", "next-auth.csrf-token=abc")).status).toBe(307);
+    expect(proxy(request("/dashboard", "next-auth.csrf-token=abc")).status).toBe(307);
   });
 });

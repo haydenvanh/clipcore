@@ -12,7 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { FFMPEG, FFPROBE } from "../worker/lib/binaries.js";
-import { WHISPER_CLI, LOCAL_MODEL_PATH } from "../worker/lib/transcribe-local.js";
+import { WHISPER_CLI, LOCAL_MODEL_PATH, VAD_MODEL_PATH } from "../worker/lib/transcribe-local.js";
 
 const RED = "\x1b[31m", GREEN = "\x1b[32m", YELLOW = "\x1b[33m", DIM = "\x1b[2m", RESET = "\x1b[0m";
 
@@ -51,6 +51,12 @@ check("config", "GOOGLE_CLIENT_ID", /\.apps\.googleusercontent\.com$/.test(proce
 check("config", "GOOGLE_CLIENT_SECRET", !placeholder(process.env.GOOGLE_CLIENT_SECRET) && /^GOCSPX-/.test(process.env.GOOGLE_CLIENT_SECRET || ""),
   "Shown next to the client ID on the same OAuth client.");
 
+// Payments are optional locally; without them checkout says so.
+optional("config", "STRIPE_SECRET_KEY", /^sk_(test|live)_/.test(process.env.STRIPE_SECRET_KEY || ""),
+  "Needed to take payments. Stripe Dashboard → Developers → API keys, then npm run stripe:setup.");
+optional("config", "STRIPE_WEBHOOK_SECRET", /^whsec_/.test(process.env.STRIPE_WEBHOOK_SECRET || ""),
+  "Needed for plans to activate after payment. Locally: stripe listen --forward-to localhost:3000/api/webhook/stripe");
+
 const hasOpenAi = !placeholder(process.env.OPENAI_API_KEY) && /^sk-/.test(process.env.OPENAI_API_KEY || "");
 optional("config", "OPENAI_API_KEY", hasOpenAi,
   "Optional. Without it, transcription runs locally with whisper.cpp (free).");
@@ -76,6 +82,8 @@ const localCheck = hasOpenAi ? optional : check;
 localCheck("tools", "whisper.cpp", whisper.ok || /usage: whisper-cli/.test(whisper.out), "brew install whisper-cpp");
 localCheck("tools", `speech model ${DIM}(${path.relative(process.cwd(), LOCAL_MODEL_PATH)})${RESET}`,
   fs.existsSync(LOCAL_MODEL_PATH), "npm run setup:model   (downloads ~550 MB, once)");
+localCheck("tools", `voice-activity model ${DIM}(${path.relative(process.cwd(), VAD_MODEL_PATH)})${RESET}`,
+  fs.existsSync(VAD_MODEL_PATH), "npm run setup:model   (downloads ~1 MB)");
 
 // ── Database ────────────────────────────────────────────────────────────────
 if (!placeholder(db)) {

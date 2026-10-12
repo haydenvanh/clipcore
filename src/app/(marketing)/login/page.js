@@ -20,7 +20,7 @@ const ERRORS = {
 
 /** Only same-site paths, so ?next= can't send someone to another website. */
 function safeNext(value) {
-  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") ? value : "/";
+  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") ? value : "/dashboard";
 }
 
 export default async function LoginPage({ searchParams }) {
@@ -32,7 +32,7 @@ export default async function LoginPage({ searchParams }) {
   const error = params?.error ? ERRORS[params.error] ?? "Sign-in failed. Please try again." : null;
 
   return (
-    <div className="flex-1 flex items-center justify-center px-5 py-16">
+    <div className="flex-1 flex items-center justify-center px-5 py-24">
       <div className="panel w-full max-w-sm p-8 space-y-6 text-center">
         <div className="flex flex-col items-center gap-3">
           <LogoMark size={36} className="text-primary-text" title="ClipCore" />

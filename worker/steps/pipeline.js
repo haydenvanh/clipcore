@@ -4,7 +4,7 @@ import path from "node:path";
 import { prisma } from "../lib/db.js";
 import * as storage from "../lib/storage.js";
 import {
-  probe, downloadSource, normalize, extractAudioChunk, extractAudioWav, thumbnail, renderClip,
+  probe, downloadSource, remoteDuration, normalize, extractAudioChunk, extractAudioWav, thumbnail, renderClip,
 } from "../lib/ffmpeg.js";
 import {
   transcribeWithRetry, planChunks, mergeChunkResults, isTranscriptionConfigured, WHISPER_MODEL_ID,
@@ -14,6 +14,9 @@ import { analyzeTranscript } from "../lib/analyze.js";
 import { selectMomentsLocally } from "../lib/select-local.js";
 import { buildAss } from "../lib/captions.js";
 import { PermanentError, classifyDownloadError } from "../lib/errors.js";
+// Shared with the web app; plain JS with relative imports only.
+import { MAX_VIDEO_SECONDS } from "../../src/lib/plans.js";
+import { getUsage, formatDuration } from "../../src/lib/usage.js";
 
 /**
  * The five pipeline steps, one exported function each.
@@ -33,6 +36,27 @@ async function withTempDir(prefix, fn) {
     // A leaked temp dir holding a 2 GB video fills the container's disk and
     // takes down every later job, so this must run on failure too.
     await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * Refuse a video longer than the per-video limit or than the minutes the
+ * user has left this month. A video already charged (a retry) passes.
+ */
+async function assertWithinPlan(video, seconds) {
+  if (seconds > MAX_VIDEO_SECONDS) {
+    throw new PermanentError(
+      `This video is ${formatDuration(seconds)} long. Videos can be up to ${formatDuration(MAX_VIDEO_SECONDS)}.`
+    );
+  }
+  if (await prisma.usage.findUnique({ where: { videoId: video.id } })) return;
+
+  const user = await prisma.user.findUnique({ where: { id: video.userId }, select: { id: true, plan: true } });
+  const { remainingSeconds } = await getUsage(prisma, user);
+  if (remainingSeconds != null && seconds > remainingSeconds) {
+    throw new PermanentError(
+      `This video is ${formatDuration(seconds)} long, but you have ${formatDuration(remainingSeconds)} of video left this month. Upgrade your plan or try a shorter video.`
+    );
   }
 }
 
@@ -59,8 +83,13 @@ export async function extract({ videoId }) {
     } else {
       if (!video.sourceUrl) throw new PermanentError("This video has no source link.");
       try {
+        // Check the length before downloading, so an over-limit video is
+        // refused in seconds rather than after fetching gigabytes.
+        const expected = await remoteDuration(video.sourceUrl);
+        if (expected) await assertWithinPlan(video, expected);
         ({ title: fetchedTitle } = await downloadSource(video.sourceUrl, rawPath));
       } catch (error) {
+        if (error?.permanent) throw error;
         throw classifyDownloadError(error);
       }
     }
@@ -69,6 +98,7 @@ export async function extract({ videoId }) {
     if (!rawInfo.hasAudio) {
       throw new PermanentError("This video has no audio track, so there is nothing to transcribe.");
     }
+    await assertWithinPlan(video, rawInfo.durationSec);
 
     const normalizedPath = path.join(dir, "normalized.mp4");
     await normalize(rawPath, normalizedPath, rawInfo);
@@ -82,20 +112,30 @@ export async function extract({ videoId }) {
     const thumbKey = storage.keys.sourceThumb(video.userId, video.id);
     await storage.upload(thumbPath, thumbKey, "image/jpeg");
 
-    await prisma.video.update({
-      where: { id: videoId },
-      data: {
-        storageKey: key,
-        thumbnailKey: thumbKey,
-        // Keep a title the user set; otherwise use the one YouTube reports.
-        ...(video.title ? {} : fetchedTitle ? { title: fetchedTitle.slice(0, 200) } : {}),
-        durationSec: Math.round(info.durationSec),
-        sizeBytes: BigInt(Math.round(info.sizeBytes)),
-        width: info.width,
-        height: info.height,
-        status: "TRANSCRIBING",
-      },
-    });
+    // Charge the minutes in the same transaction that marks the download
+    // done. Upsert, so a retried extract never charges twice.
+    const seconds = Math.round(info.durationSec);
+    await prisma.$transaction([
+      prisma.usage.upsert({
+        where: { videoId },
+        create: { userId: video.userId, videoId, seconds },
+        update: {},
+      }),
+      prisma.video.update({
+        where: { id: videoId },
+        data: {
+          storageKey: key,
+          thumbnailKey: thumbKey,
+          // Keep a title the user set; otherwise use the one YouTube reports.
+          ...(video.title ? {} : fetchedTitle ? { title: fetchedTitle.slice(0, 200) } : {}),
+          durationSec: Math.round(info.durationSec),
+          sizeBytes: BigInt(Math.round(info.sizeBytes)),
+          width: info.width,
+          height: info.height,
+          status: "TRANSCRIBING",
+        },
+      }),
+    ]);
 
     return { videoId, durationSec: info.durationSec };
   });

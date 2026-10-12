@@ -4,6 +4,8 @@ import { Queue, JOB_TYPES } from "@/lib/queue";
 import { assertSafeUrl, detectSource } from "@/lib/url-guard";
 import { mediaUrl } from "@/lib/storage";
 import { ApiError, handler, readJson, requireUser } from "@/lib/api";
+import { getUsage, formatDuration } from "@/lib/usage";
+import { PLANS } from "@/lib/plans";
 
 const IN_FLIGHT = ["PENDING", "EXTRACTING", "TRANSCRIBING", "ANALYZING", "RENDERING"];
 
@@ -90,6 +92,25 @@ export const POST = handler("VIDEOS_CREATE", async (req) => {
     return NextResponse.json({ videoId: existing.id, status: existing.status, duplicate: true });
   }
 
+  // Plan limits. The exact check against the video's length happens in the
+  // worker once it knows the duration; this one gives an immediate answer
+  // when there's nothing left at all.
+  const account = await prisma.user.findUnique({ where: { id: user.id }, select: { id: true, plan: true } });
+  const plan = PLANS[account.plan] ?? PLANS.FREE;
+  const usage = await getUsage(prisma, account);
+  if (usage.remainingSeconds === 0) {
+    const resets = usage.resetsAt.toLocaleDateString("en-US", { month: "long", day: "numeric", timeZone: "UTC" });
+    throw new ApiError(402, `You've used all ${formatDuration(usage.limitSeconds)} of video this month. Upgrade your plan, or your minutes reset on ${resets}.`);
+  }
+  const inFlight = await prisma.video.count({ where: { userId: user.id, status: { in: IN_FLIGHT } } });
+  if (inFlight >= plan.maxInFlight) {
+    const upgrade = plan.id === "FREE" || plan.id === "STARTER" ? " Upgrade to process more at once." : "";
+    throw new ApiError(
+      429,
+      `${plan.name} processes ${plan.maxInFlight === 1 ? "one video" : `${plan.maxInFlight} videos`} at a time — start another when this finishes.${upgrade}`
+    );
+  }
+
   const video = await prisma.$transaction(async (tx) => {
     const created = await tx.video.create({
       data: {
@@ -101,7 +122,7 @@ export const POST = handler("VIDEOS_CREATE", async (req) => {
       },
     });
     await Queue.enqueue(
-      { type: JOB_TYPES.EXTRACT, payload: { videoId: created.id }, refType: "video", refId: created.id },
+      { type: JOB_TYPES.EXTRACT, payload: { videoId: created.id }, priority: plan.priority, refType: "video", refId: created.id },
       tx
     );
     return created;

@@ -108,6 +108,25 @@ Each stage is a separate job. If one fails, **Retry** on the video's page
 resumes from where it stopped — a failed render doesn't re-download or
 re-transcribe.
 
+## Plans and payments
+
+Plans, prices, and limits live in one file, `src/lib/plans.js`, which drives the
+pricing page, Stripe, and usage limits. Minutes are counted per calendar month
+when a video finishes downloading; retries are free. Stripe Checkout takes
+payment, the billing portal handles plan changes and cancellations, and the
+webhook at `/api/webhook/stripe` is the only thing that changes a user's plan.
+
+To try payments locally, add a test key (`sk_test_…`) to `.env`, run
+`npm run stripe:setup`, and forward webhooks with the Stripe CLI:
+
+```bash
+stripe listen --forward-to localhost:3000/api/webhook/stripe
+```
+
+## Deploying
+
+See [DEPLOY.md](DEPLOY.md).
+
 ## Where things are
 
 - **Clips and source videos:** `.storage/` in the project folder
@@ -140,6 +159,8 @@ None by default. Only the optional API keys above cost anything.
 | `npm run doctor` | Check setup |
 | `npm run setup:model` | Download the speech model |
 | `npm run claim-videos -- you@gmail.com` | Move videos made before sign-in existed into your account |
+| `npm run stripe:setup` | Create the plans and prices in Stripe (from `src/lib/plans.js`) |
+| `npm run start:prod` | Production: migrate, fetch models, run web + worker (the container's command) |
 | `npm run db:migrate` | Apply database migrations |
 | `npm test` | Tests |
 | `npm run worker` | Worker only |

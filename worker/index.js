@@ -50,7 +50,7 @@ async function claim(limit) {
         LIMIT ${limit}
           FOR UPDATE SKIP LOCKED
      )
-    RETURNING j.id, j.type, j.payload, j.attempts, j."maxAttempts", j."refType", j."refId"
+    RETURNING j.id, j.type, j.payload, j.attempts, j."maxAttempts", j."refType", j."refId", j.priority
   `;
 }
 
@@ -68,13 +68,13 @@ async function execute(job) {
   switch (job.type) {
     case "extract": {
       const result = await extract(job.payload);
-      await enqueue("transcribe", { videoId: result.videoId }, "video", result.videoId);
+      await enqueue("transcribe", { videoId: result.videoId }, "video", result.videoId, job.priority);
       return result;
     }
 
     case "transcribe": {
       const result = await transcribeStep(job.payload);
-      await enqueue("analyze", { videoId: result.videoId }, "video", result.videoId);
+      await enqueue("analyze", { videoId: result.videoId }, "video", result.videoId, job.priority);
       return result;
     }
 
@@ -84,7 +84,7 @@ async function execute(job) {
       // independently.
       for (const clipId of result.clipIds) {
         const renderRow = await createDefaultRender(clipId);
-        await enqueue("render", { renderId: renderRow.id }, "render", renderRow.id);
+        await enqueue("render", { renderId: renderRow.id }, "render", renderRow.id, job.priority);
       }
       return result;
     }
@@ -123,9 +123,10 @@ async function createDefaultRender(clipId) {
   });
 }
 
-async function enqueue(type, payload, refType, refId) {
+/** Queue the next stage. It inherits the job's priority, so a paid plan stays ahead throughout. */
+async function enqueue(type, payload, refType, refId, priority = 0) {
   return prisma.job.create({
-    data: { type, payload, refType, refId, status: "QUEUED", runAfter: new Date() },
+    data: { type, payload, refType, refId, priority, status: "QUEUED", runAfter: new Date() },
   });
 }
 

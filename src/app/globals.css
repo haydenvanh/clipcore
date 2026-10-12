@@ -52,11 +52,11 @@
 /* Neutral, product-first. Greys carry the interface; the accent appears only
    on the primary action and on active state — roughly 2% of the pixels. */
 [data-theme="slate-indigo"] {
-  --bg-page: #08090a;
-  --bg-card: #0e0f11;
-  --bg-card-hover: #16171a;
-  --bg-elevated: #121316;
-  --divider: #202227;
+  --bg-page: #030303;
+  --bg-card: #0c0c0e;
+  --bg-card-hover: #141417;
+  --bg-elevated: #111114;
+  --divider: #1f1f24;
   --primary: #5e6ad2;
   --primary-hover: #6a75d8;
   --primary-text: #f7f8f8;
@@ -307,4 +307,44 @@
   .tabular-nums {
     font-variant-numeric: tabular-nums;
   }
+}
+
+/* ─── Buttons ─────────────────────────────────────────────────────────────────
+   Pill buttons. White is the one primary action on any screen; everything else
+   is outlined or plain. */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 150ms, color 150ms, border-color 150ms, opacity 150ms;
+}
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn-primary { background: #ffffff; color: #0a0a0a; }
+.btn-primary:hover:not(:disabled) { background: #e6e6e6; }
+.btn-secondary { background: transparent; color: var(--color-primary-text); border: 1px solid var(--color-divider); }
+.btn-secondary:hover:not(:disabled) { background: var(--color-bg-card-hover); border-color: #2c2c33; }
+
+.eyebrow {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-secondary-text);
+}
+
+/* The playhead sweeping the source timeline in the hero demo. */
+@keyframes scan {
+  from { left: 0%; }
+  to { left: 100%; }
+}
+.animate-scan { animation: scan 14s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-scan { animation: none; left: 30%; }
 }

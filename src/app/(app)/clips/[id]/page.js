@@ -30,7 +30,7 @@ export default function ClipPage({ params }) {
     return (
       <div className="text-center py-24">
         <p className="text-sm font-semibold">Clip not found.</p>
-        <Link href="/" className="text-xs text-primary hover:underline mt-2 inline-block">
+        <Link href="/dashboard" className="text-xs text-primary hover:underline mt-2 inline-block">
           Back to your clips
         </Link>
       </div>

@@ -5,7 +5,7 @@ import { signIn } from "next-auth/react";
 import { FcGoogle } from "react-icons/fc";
 import { FiLoader } from "react-icons/fi";
 
-export default function SignInButton({ callbackUrl = "/" }) {
+export default function SignInButton({ callbackUrl = "/dashboard" }) {
   const [pending, setPending] = useState(false);
 
   return (

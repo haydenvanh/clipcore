@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { Queue, JOB_TYPES } from "@/lib/queue";
 import { ApiError, handler, requireUser } from "@/lib/api";
+import { PLANS } from "@/lib/plans";
 import { resumePoint } from "@/lib/resume";
 
 /**
@@ -32,6 +33,9 @@ export const POST = handler("VIDEO_RETRY", async (req, ctx) => {
   const from = resumePoint(video);
   if (!from) throw new ApiError(409, "Nothing to retry — every clip rendered.");
 
+  const { plan } = await prisma.user.findUnique({ where: { id: user.id }, select: { plan: true } });
+  const priority = (PLANS[plan] ?? PLANS.FREE).priority;
+
   await prisma.$transaction(async (tx) => {
     if (from === "render") {
       const failed = video.clips.flatMap((c) => c.renders).filter((r) => r.status === "FAILED");
@@ -42,7 +46,7 @@ export const POST = handler("VIDEO_RETRY", async (req, ctx) => {
       await tx.video.update({ where: { id }, data: { status: "RENDERING", error: null, completedAt: null } });
       for (const render of failed) {
         await Queue.enqueue(
-          { type: JOB_TYPES.RENDER, payload: { renderId: render.id }, refType: "render", refId: render.id },
+          { type: JOB_TYPES.RENDER, payload: { renderId: render.id }, priority, refType: "render", refId: render.id },
           tx
         );
       }
@@ -54,7 +58,7 @@ export const POST = handler("VIDEO_RETRY", async (req, ctx) => {
     const status = { extract: "PENDING", transcribe: "TRANSCRIBING", analyze: "ANALYZING" }[from];
     await tx.video.update({ where: { id }, data: { status, error: null, completedAt: null } });
     await Queue.enqueue(
-      { type: from, payload: { videoId: id }, refType: "video", refId: id },
+      { type: from, payload: { videoId: id }, priority, refType: "video", refId: id },
       tx
     );
   });

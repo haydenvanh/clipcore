@@ -1,0 +1,14 @@
+# Never ship secrets, local media, models, or build output in the image.
+.env
+.env.*
+!.env.example
+.storage
+models
+node_modules
+.next
+.git
+.claude
+coverage
+docs
+tests
+*.log

@@ -25,9 +25,43 @@ model User {
   image     String?
   createdAt DateTime @default(now())
 
+  // Billing. Written only by the Stripe webhook (src/lib/billing-sync.js), so
+  // it always mirrors Stripe rather than what the browser claims.
+  plan                 Plan      @default(FREE)
+  billingInterval      String?
+  stripeCustomerId     String?   @unique
+  stripeSubscriptionId String?   @unique
+  subscriptionStatus   String?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean   @default(false)
+
   videos  Video[]
   clips   Clip[]
   renders Render[]
+  usage   Usage[]
+}
+
+enum Plan {
+  FREE
+  STARTER
+  PRO
+  UNLIMITED
+}
+
+// Minutes of video processed: one row per video, written when its download
+// finishes. A ledger rather than a sum over Video rows, so deleting a video
+// doesn't hand its minutes back.
+model Usage {
+  id        String   @id @default(cuid())
+  userId    String
+  videoId   String?  @unique
+  seconds   Int
+  createdAt DateTime @default(now())
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video Video? @relation(fields: [videoId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
 }
 
 // ─────────────────────────────── Media ──────────────────────────────────────
@@ -75,6 +109,7 @@ model Video {
   completedAt DateTime?
 
   user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  usage      Usage?
   transcript Transcript?
   clips      Clip[]
 
