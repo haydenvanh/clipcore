@@ -21,6 +21,17 @@ export const LOCAL_MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/res
 export const LOCAL_MODEL_PATH = path.resolve(REPO_ROOT, process.env.WHISPER_CPP_MODEL || path.join("models", LOCAL_MODEL_FILE));
 export const LOCAL_MODEL_NAME = `whisper.cpp:${path.basename(LOCAL_MODEL_PATH, ".bin").replace(/^ggml-/, "")}`;
 
+/**
+ * Voice-activity detection model (Silero, ~1 MB). With it, whisper.cpp only
+ * transcribes the parts of the audio that contain speech. Without it, music
+ * and silence come out as invented text: on a test film, end credits produced
+ * lines echoed from the prompt and action scenes produced one sentence
+ * repeated dozens of times — all of which became captions and clips.
+ */
+export const VAD_MODEL_FILE = "ggml-silero-v5.1.2.bin";
+export const VAD_MODEL_URL = `https://huggingface.co/ggml-org/whisper-vad/resolve/main/${VAD_MODEL_FILE}`;
+export const VAD_MODEL_PATH = path.resolve(REPO_ROOT, process.env.WHISPER_VAD_MODEL || path.join("models", VAD_MODEL_FILE));
+
 const CLI_CANDIDATES = ["/opt/homebrew/bin/whisper-cli", "/usr/local/bin/whisper-cli"];
 export const WHISPER_CLI =
   process.env.WHISPER_CPP_PATH || CLI_CANDIDATES.find((p) => fs.existsSync(p)) || "whisper-cli";
@@ -56,8 +67,10 @@ const estimate = (word) => Math.max(0.18, String(word.w).length * 0.07);
  * Checked before a job starts so the failure names the fix.
  */
 export function localTranscriptionProblem() {
-  if (!fs.existsSync(LOCAL_MODEL_PATH)) {
-    return `The speech model isn't downloaded (${path.relative(REPO_ROOT, LOCAL_MODEL_PATH)}). Run: npm run setup:model — then press Retry.`;
+  for (const model of [LOCAL_MODEL_PATH, VAD_MODEL_PATH]) {
+    if (!fs.existsSync(model)) {
+      return `A speech model isn't downloaded (${path.relative(REPO_ROOT, model)}). Run: npm run setup:model — then press Retry.`;
+    }
   }
   if (WHISPER_CLI === "whisper-cli" && !isOnPath("whisper-cli")) {
     return "whisper.cpp isn't installed. Run: brew install whisper-cpp — then restart and press Retry.";
@@ -197,6 +210,7 @@ export async function transcribeLocally(audioPath, { language, durationSec } = {
       "-t", String(threads),
       "-ml", "1", "-sow",
       ...(prompt ? ["--prompt", prompt, "--carry-initial-prompt"] : []),
+      "--vad", "-vm", VAD_MODEL_PATH,
       "-oj", "-of", outBase,
       "-np",
     ],
