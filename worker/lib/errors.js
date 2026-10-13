@@ -26,6 +26,10 @@ const YTDLP_PERMANENT = [
   [/members-only|join this channel/i, "This video is members-only."],
   [/is not a valid url|unsupported url/i, "That link isn't a video yt-dlp can download."],
   [/premieres in|live event will begin/i, "This video hasn't premiered yet."],
+  // YouTube refusing the server's IP address, not anything about the video.
+  // Retrying minutes later rarely helps; fail fast with a message a customer
+  // can act on (the fix on our side is YTDLP_PROXY — see DEPLOY.md).
+  [/not a bot/i, "YouTube is temporarily blocking downloads from our servers. Please try again a little later."],
 ];
 
 export function classifyDownloadError(error) {

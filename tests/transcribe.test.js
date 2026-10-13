@@ -125,3 +125,19 @@ describe("transcribeWithRetry", () => {
     expect(typeof transcribeWithRetry).toBe("function");
   });
 });
+
+describe("classifyDownloadError — YouTube blocking the server", () => {
+  it("turns the bot check into a permanent, readable error", async () => {
+    const { classifyDownloadError } = await import("../worker/lib/errors.js");
+    const error = classifyDownloadError(
+      new Error("yt-dlp exited 1: ERROR: [youtube] jNQXAC9IVRw: Sign in to confirm you’re not a bot. Use --cookies-from-browser")
+    );
+    expect(error.permanent).toBe(true);
+    expect(error.message).toMatch(/YouTube is temporarily blocking/);
+  });
+
+  it("still reports age-restricted videos as such", async () => {
+    const { classifyDownloadError } = await import("../worker/lib/errors.js");
+    expect(classifyDownloadError(new Error("Sign in to confirm your age")).message).toMatch(/age-restricted/);
+  });
+});
