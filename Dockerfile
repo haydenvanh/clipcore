@@ -2,7 +2,7 @@
 #
 # One container rather than two because both need the same disk: the worker
 # writes videos and clips, and the website streams them back to users. Mount a
-# persistent volume at /data (see DEPLOY.md).
+# persistent volume at /data for them (see DEPLOY.md).
 
 # ── whisper.cpp, for free transcription on the server's CPU ─────────────────
 FROM debian:bookworm-slim AS whisper
@@ -17,6 +17,20 @@ RUN cmake -S /src -B /build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
       -DWHISPER_BUILD_TESTS=OFF \
  && cmake --build /build -j"$(nproc)" --target whisper-cli \
  && install -m 0755 /build/bin/whisper-cli /usr/local/bin/whisper-cli
+
+# ── Speech models, baked into the image ─────────────────────────────────────
+# ~550 MB. In the image rather than on the volume: no first-boot download, and
+# the volume holds only videos and clips. Its own stage, so a code change
+# doesn't download them again.
+FROM debian:bookworm-slim AS models
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN mkdir /models \
+ && curl -fsSL --retry 3 -o /models/ggml-large-v3-turbo-q5_0.bin \
+      https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin \
+ && curl -fsSL --retry 3 -o /models/ggml-silero-v5.1.2.bin \
+      https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
 
 # ── The app ──────────────────────────────────────────────────────────────────
 FROM node:24-bookworm-slim AS build
@@ -46,13 +60,12 @@ COPY --from=whisper /usr/local/bin/whisper-cli /usr/local/bin/whisper-cli
 
 WORKDIR /app
 COPY --from=build /app ./
+COPY --from=models /models ./models
 
 ENV NODE_ENV=production \
     PORT=3000 \
-    LOCAL_STORAGE_DIR=/data/storage \
-    WHISPER_CPP_MODEL=/data/models/ggml-large-v3-turbo-q5_0.bin \
-    WHISPER_VAD_MODEL=/data/models/ggml-silero-v5.1.2.bin
+    LOCAL_STORAGE_DIR=/data/storage
 
 EXPOSE 3000
-# Migrations, model download on first boot, then web + worker.
+# Migrations, then web + worker.
 CMD ["node", "scripts/start.mjs"]

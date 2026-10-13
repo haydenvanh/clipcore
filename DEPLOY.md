@@ -18,7 +18,8 @@ works the same way.
 
 1. Railway → **New Project** → **Deploy from GitHub repo** → `clipcore`.
    It builds from the `Dockerfile` (the first build compiles whisper.cpp and takes ~5 minutes).
-2. Service → **Settings → Volumes** → add a volume mounted at **`/data`**, 20 GB or more.
+2. Service → **Settings → Volumes** → add a volume mounted at **`/data`**. Railway's free trial caps volumes
+   at 0.5 GB, which a single long video fills — the Hobby plan starts at 5 GB and can be grown.
 3. Service → **Settings → Networking** → **Generate Domain** (or add your own domain and set the CNAME it shows).
 
 ## 2. Set the variables
@@ -45,7 +46,7 @@ OPENAI_API_KEY=      # Whisper API transcribes instead of the server CPU — fas
 YTDLP_PROXY=         # if YouTube blocks the server, see Troubleshooting
 ```
 
-On first boot the container downloads the speech models (~550 MB) to `/data/models`. Later boots skip it.
+The speech models are built into the image, so the volume holds only videos and clips.
 
 ## 3. Google sign-in
 

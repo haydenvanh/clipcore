@@ -42,7 +42,13 @@ async function download(url, target) {
     }
   });
 
-  await pipeline(body, fs.createWriteStream(partPath));
+  try {
+    await pipeline(body, fs.createWriteStream(partPath));
+  } catch (error) {
+    // Don't leave a partial file taking up the space the next attempt needs.
+    fs.rmSync(partPath, { force: true });
+    throw error;
+  }
   fs.renameSync(partPath, target);
   console.log(`\r  ${mb(received)} — done.                    `);
 }
