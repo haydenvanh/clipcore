@@ -21,7 +21,36 @@ function hasSessionCookie(request) {
     .some(({ name }) => /^(__Secure-)?next-auth\.session-token(\.\d+)?$/.test(name));
 }
 
+/**
+ * In production, one address only: www, the Railway address, and any other
+ * host forward to the canonical one in NEXTAUTH_URL.
+ *
+ * Sign-in depends on it: next-auth keeps its state cookie on the host sign-in
+ * started from, and Google always returns to NEXTAUTH_URL. Start on www, come
+ * back to the bare domain, and the cookie is missing — "State cookie was
+ * missing" and a failed sign-in.
+ */
+function canonicalRedirect(request, env = process.env) {
+  if (env.NODE_ENV !== "production" || !env.NEXTAUTH_URL) return null;
+  let canonical;
+  try {
+    canonical = new URL(env.NEXTAUTH_URL);
+  } catch {
+    return null;
+  }
+  const host = (request.headers.get("x-forwarded-host") || request.headers.get("host") || "").split(",")[0].trim();
+  if (!host || host === canonical.host) return null;
+
+  const target = new URL(`${request.nextUrl.pathname}${request.nextUrl.search}`, canonical.origin);
+  return NextResponse.redirect(target, 308);
+}
+
+export { canonicalRedirect };
+
 export function proxy(request) {
+  const redirect = canonicalRedirect(request);
+  if (redirect) return redirect;
+
   const { pathname, search } = request.nextUrl;
 
   const isPublic = PUBLIC_PATHS.some((path) => pathname === path || (path !== "/" && pathname.startsWith(`${path}/`)));

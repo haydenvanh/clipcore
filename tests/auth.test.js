@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { NextRequest } from "next/server";
 import { canAccessKey } from "../src/lib/media-access.js";
-import { proxy } from "../src/proxy.js";
+import { proxy, canonicalRedirect } from "../src/proxy.js";
 
 describe("canAccessKey — users only read their own files", () => {
   const owners = { clipA: "alice", clipB: "bob" };
@@ -66,5 +66,31 @@ describe("proxy — signed-out visitors go to /login", () => {
 
   it("isn't fooled by a similarly named cookie", () => {
     expect(proxy(request("/dashboard", "next-auth.csrf-token=abc")).status).toBe(307);
+  });
+});
+
+describe("canonicalRedirect — one address in production", () => {
+  const prod = { NODE_ENV: "production", NEXTAUTH_URL: "https://useclipcore.com" };
+  const request = (url, host) => new NextRequest(url, { headers: { host } });
+
+  it("forwards www and the Railway address to the canonical domain, keeping the path", () => {
+    for (const host of ["www.useclipcore.com", "clipcore-production.up.railway.app"]) {
+      const response = canonicalRedirect(request(`https://${host}/pricing?interval=month`, host), prod);
+      expect(response.status).toBe(308);
+      expect(response.headers.get("location")).toBe("https://useclipcore.com/pricing?interval=month");
+    }
+  });
+
+  it("leaves the canonical domain alone", () => {
+    expect(canonicalRedirect(request("https://useclipcore.com/", "useclipcore.com"), prod)).toBeNull();
+  });
+
+  it("trusts the forwarded host behind the platform's proxy", () => {
+    const req = new NextRequest("http://10.0.0.5:3000/", { headers: { host: "10.0.0.5:3000", "x-forwarded-host": "useclipcore.com" } });
+    expect(canonicalRedirect(req, prod)).toBeNull();
+  });
+
+  it("does nothing outside production", () => {
+    expect(canonicalRedirect(request("http://127.0.0.1:3000/", "127.0.0.1:3000"), { NODE_ENV: "development", NEXTAUTH_URL: "http://localhost:3000" })).toBeNull();
   });
 });
