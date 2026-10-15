@@ -12,7 +12,7 @@ import { NextResponse } from "next/server";
  */
 
 /** Pages anyone can open. Everything else needs a session. */
-const PUBLIC_PATHS = ["/", "/pricing", "/login", "/terms", "/privacy"];
+const PUBLIC_PATHS = ["/", "/pricing", "/login", "/terms", "/privacy", "/opengraph-image"];
 
 /** next-auth's session cookie; large tokens are split into .0, .1, … */
 function hasSessionCookie(request) {

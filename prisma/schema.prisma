@@ -95,6 +95,8 @@ model Video {
   /// Storage key of the normalized source MP4. Null until extraction finishes.
   storageKey   String?
   thumbnailKey String?
+  // When the downloaded original was deleted to save disk (clips are kept).
+  sourceDeletedAt DateTime?
 
   durationSec Int?
   sizeBytes   BigInt?

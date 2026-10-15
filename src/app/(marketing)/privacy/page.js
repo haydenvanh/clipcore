@@ -11,7 +11,7 @@ export default function PrivacyPage() {
       <h2>What we collect</h2>
       <ul>
         <li><strong>Account details from Google sign-in:</strong> your name, email address, and profile photo. We don&apos;t receive your Google password.</li>
-        <li><strong>Videos you submit:</strong> the link, the downloaded video, its transcript, and the clips we make from it.</li>
+        <li><strong>Videos you submit:</strong> the link or uploaded file, its transcript, and the clips we make from it. The original video is deleted once your clips are made (or 7 days later if any clip failed); the clips stay until you delete them.</li>
         <li><strong>Billing details:</strong> your plan and subscription status. Card details are collected and stored by Stripe, never by us.</li>
         <li><strong>Usage:</strong> how many minutes of video you&apos;ve processed, to apply your plan&apos;s limits.</li>
       </ul>

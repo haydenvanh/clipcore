@@ -43,7 +43,7 @@ describe("proxy — signed-out visitors go to /login", () => {
   });
 
   it("lets the public marketing pages through", () => {
-    for (const path of ["/", "/pricing", "/login", "/terms", "/privacy"]) {
+    for (const path of ["/", "/pricing", "/login", "/terms", "/privacy", "/opengraph-image"]) {
       expect(proxy(request(path)).headers.get("location")).toBeNull();
     }
   });

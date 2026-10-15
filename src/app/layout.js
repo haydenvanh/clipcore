@@ -10,6 +10,7 @@ export const metadata = {
   description:
     "Paste a YouTube link. ClipCore finds the best moments and turns them into vertical clips with animated captions — ready for TikTok, Shorts, and Reels.",
   openGraph: { type: "website", siteName: "ClipCore" },
+  twitter: { card: "summary_large_image" },
 };
 
 export default function RootLayout({ children }) {

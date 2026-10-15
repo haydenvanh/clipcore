@@ -12,7 +12,7 @@ export default function TermsPage() {
 
       <h2>The service</h2>
       <p>
-        ClipCore takes a video you link to, transcribes it, selects moments from it, and produces short vertical clips with
+        ClipCore takes a video you link to or upload, transcribes it, selects moments from it, and produces short vertical clips with
         captions for you to download.
       </p>
 

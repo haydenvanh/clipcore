@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import { FiLoader, FiArrowRight } from "react-icons/fi";
+import UploadButton from "@/components/dashboard/UploadButton";
 
 /**
  * Paste a YouTube link, start processing, and go straight to its page.
@@ -66,7 +67,7 @@ export default function NewVideoForm({ onStarted, initialUrl }) {
   return (
     <form onSubmit={submit} className="panel p-5 sm:p-6">
       <label htmlFor="source-url" className="block text-sm font-medium text-primary-text mb-3">
-        YouTube link
+        Paste a YouTube link
       </label>
 
       <div className="flex flex-col sm:flex-row gap-3">
@@ -97,6 +98,17 @@ export default function NewVideoForm({ onStarted, initialUrl }) {
             </>
           )}
         </button>
+      </div>
+
+      <div className="mt-4">
+        <UploadButton
+          disabled={busy}
+          onLimit={setLimitError}
+          onUploaded={(videoId) => {
+            onStarted?.(videoId);
+            router.push(`/videos/${videoId}`);
+          }}
+        />
       </div>
 
       {limitError ? (

@@ -16,7 +16,8 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
  * `r2` is kept for running the worker somewhere other than this machine.
  */
 
-const LOCAL_ROOT = path.resolve(process.env.LOCAL_STORAGE_DIR || ".storage");
+// Dynamic by design (an env var); tell Turbopack not to trace it.
+const LOCAL_ROOT = path.resolve(/*turbopackIgnore: true*/ process.env.LOCAL_STORAGE_DIR || ".storage");
 
 const hasR2 =
   Boolean(process.env.R2_BUCKET) &&
@@ -110,6 +111,14 @@ export async function writeStream(key, webStream) {
 
   const { size } = await fs.promises.stat(target);
   return { key, size };
+}
+
+/** Free bytes on the disk that holds local storage; Infinity for object storage. */
+export async function freeBytes() {
+  if (driver !== "local") return Infinity;
+  await fs.promises.mkdir(LOCAL_ROOT, { recursive: true });
+  const stats = await fs.promises.statfs(LOCAL_ROOT);
+  return stats.bavail * stats.bsize;
 }
 
 export async function deleteObject(key) {

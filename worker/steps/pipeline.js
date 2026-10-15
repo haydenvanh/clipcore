@@ -17,6 +17,7 @@ import { PermanentError, classifyDownloadError } from "../lib/errors.js";
 // Shared with the web app; plain JS with relative imports only.
 import { MAX_VIDEO_SECONDS } from "../../src/lib/plans.js";
 import { getUsage, formatDuration } from "../../src/lib/usage.js";
+import { MIN_FREE_BYTES, deleteSourceIfDone } from "../lib/cleanup.js";
 
 /**
  * The five pipeline steps, one exported function each.
@@ -73,12 +74,20 @@ export async function extract({ videoId }) {
 
   await prisma.video.update({ where: { id: videoId }, data: { status: "EXTRACTING" } });
 
+  // A download that fills the disk breaks every job at once; refuse up front.
+  if ((await storage.freeBytes()) < MIN_FREE_BYTES) {
+    console.error(JSON.stringify({ level: "error", message: "disk.low", videoId }));
+    throw new PermanentError("ClipCore is out of processing space right now. Please try again in a little while.");
+  }
+
   return withTempDir("extract", async (dir) => {
     const rawPath = path.join(dir, "raw.mp4");
     let fetchedTitle = null;
 
     if (video.source === "UPLOAD") {
-      if (!video.storageKey) throw new Error("Upload has no stored object");
+      if (!video.storageKey || video.sourceDeletedAt) {
+        throw new PermanentError("The uploaded file is no longer available. Please upload it again.");
+      }
       await storage.download(video.storageKey, rawPath);
     } else {
       if (!video.sourceUrl) throw new PermanentError("This video has no source link.");
@@ -137,8 +146,23 @@ export async function extract({ videoId }) {
       }),
     ]);
 
+    // The raw upload has been converted into the source above; it isn't
+    // needed again, and it's as big as the source.
+    if (video.source === "UPLOAD" && video.storageKey && video.storageKey !== key) {
+      await storage.remove(video.storageKey).catch(() => {});
+    }
+
     return { videoId, durationSec: info.durationSec };
   });
+}
+
+/** The original is deleted once clips are made; a later step can't use it. */
+function assertSourceAvailable(video) {
+  if (video.sourceDeletedAt) {
+    throw new PermanentError(
+      "This video's original file has been removed to save space. Add the video again to make new clips."
+    );
+  }
 }
 
 /** Run async work over items with at most `limit` in flight. */
@@ -199,6 +223,7 @@ async function transcribeOnDevice(videoPath, durationSec, dir) {
 export async function transcribeStep({ videoId }) {
   const video = await prisma.video.findUnique({ where: { id: videoId } });
   if (!video?.storageKey) throw new Error(`Video ${videoId} has no source`);
+  assertSourceAvailable(video);
 
   const useApi = isTranscriptionConfigured();
   if (!useApi) {
@@ -320,6 +345,7 @@ export async function render({ renderId }) {
   const { clip } = renderRow;
   const { video } = clip;
   if (!video.storageKey) throw new Error("Source video is not available");
+  assertSourceAvailable(video);
 
   await prisma.render.update({ where: { id: renderId }, data: { status: "RENDERING" } });
   await prisma.clip.update({ where: { id: clip.id }, data: { status: "RENDERING" } });
@@ -391,6 +417,11 @@ export async function render({ renderId }) {
         where: { id: video.id },
         data: { status: "COMPLETED", completedAt: new Date() },
       });
+      // Every clip made: the original isn't needed any more. If some failed
+      // it's kept, so Retry still works, and swept after a week.
+      await deleteSourceIfDone(prisma, video.id).catch((error) =>
+        console.error(JSON.stringify({ level: "error", message: "cleanup.failed", videoId: video.id, error: error.message }))
+      );
     }
 
     return { renderId, key, sizeBytes: size };

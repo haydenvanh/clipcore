@@ -1,5 +1,5 @@
 const STEPS = [
-  { n: "1", title: "Paste a link", body: "Drop in any YouTube video — a podcast, stream, interview, or talk, up to 4 hours long." },
+  { n: "1", title: "Paste a link or upload", body: "Drop in a YouTube link or upload a video file — a podcast, stream, interview, or talk, up to 4 hours long." },
   { n: "2", title: "AI finds the moments", body: "ClipCore transcribes every word, then scores each stretch for hooks, reactions, and questions — cut on clean sentence breaks." },
   { n: "3", title: "Download your clips", body: "Each moment comes back as a vertical 9:16 clip with word-by-word captions, ready to post." },
 ];

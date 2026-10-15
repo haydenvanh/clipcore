@@ -2,6 +2,7 @@ import "./lib/env.js";
 import { randomUUID } from "node:crypto";
 import { prisma, disconnect } from "./lib/db.js";
 import { extract, transcribeStep, analyze, render } from "./steps/pipeline.js";
+import { sweepOldSources } from "./lib/cleanup.js";
 
 /**
  * The worker loop.
@@ -268,11 +269,20 @@ async function main() {
 
   const reaper = setInterval(() => reapStale().catch((e) => log("error", "reap.failed", { error: e.message })), REAP_INTERVAL_MS);
 
+  // Hourly: delete originals past the retry window, so the disk doesn't fill.
+  const sweep = () =>
+    sweepOldSources(prisma)
+      .then((deleted) => deleted && log("info", "cleanup.swept", { deleted }))
+      .catch((e) => log("error", "cleanup.sweep_failed", { error: e.message }));
+  sweep();
+  const sweeper = setInterval(sweep, 60 * 60 * 1000);
+
   const shutdown = async (signal) => {
     if (!running) return;
     running = false;
     log("info", "worker.shutdown", { signal, inFlight });
     clearInterval(reaper);
+    clearInterval(sweeper);
 
     // Let in-flight jobs finish rather than orphaning them for the reaper.
     const deadline = Date.now() + 30_000;

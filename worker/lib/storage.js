@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 
 /**
  * Worker-side object storage, with two drivers.
@@ -62,6 +62,17 @@ const localDriver = {
     await fs.promises.writeFile(target, text, "utf8");
     return key;
   },
+
+  async remove(key) {
+    await fs.promises.rm(localPath(key), { force: true });
+  },
+
+  /** Free bytes on the disk that holds storage. */
+  async freeBytes() {
+    await fs.promises.mkdir(LOCAL_ROOT, { recursive: true });
+    const stats = await fs.promises.statfs(LOCAL_ROOT);
+    return stats.bavail * stats.bsize;
+  },
 };
 
 // ─── R2 driver ───────────────────────────────────────────────────────────────
@@ -118,6 +129,15 @@ const r2Driver = {
     );
     return key;
   },
+
+  async remove(key) {
+    await getClient().send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+  },
+
+  /** Object storage doesn't run out the way a disk does. */
+  async freeBytes() {
+    return Infinity;
+  },
 };
 
 const active = driver === "local" ? localDriver : r2Driver;
@@ -125,6 +145,8 @@ const active = driver === "local" ? localDriver : r2Driver;
 export const download = (...args) => active.download(...args);
 export const upload = (...args) => active.upload(...args);
 export const uploadText = (...args) => active.uploadText(...args);
+export const remove = (...args) => active.remove(...args);
+export const freeBytes = () => active.freeBytes();
 
 export const keys = {
   source: (userId, videoId, ext = "mp4") => `sources/${userId}/${videoId}/source.${ext}`,
