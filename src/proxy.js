@@ -66,6 +66,6 @@ export const config = {
   matcher: [
     // Pages only: API routes answer 401 themselves, and static assets need no
     // session.
-    "/((?!api/|_next/static|_next/image|favicon.ico|icon.svg|apple-icon.svg|demo/|brand/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|mp4)$).*)",
+    "/((?!api/|_next/static|_next/image|favicon.ico|demo/|brand/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|mp4)$).*)",
   ],
 };
